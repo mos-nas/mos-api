@@ -360,7 +360,7 @@ class RemotesService {
         name: data.name.trim(),
         type: data.type,
         server: data.server.trim(),
-        share: data.share.trim(),
+        share: data.type === 'nfs' && !data.share.trim().startsWith('/') ? `/${data.share.trim()}` : data.share.trim(),
         username: data.username && data.username.trim() ? data.username.trim() : null,
         password: data.password && data.password.trim() ? this._encryptPassword(data.password) : null,
         domain: data.domain && data.domain.trim() ? data.domain.trim() : null,
@@ -431,7 +431,7 @@ class RemotesService {
       if (updateData.name) remote.name = updateData.name.trim();
       if (updateData.type) remote.type = updateData.type;
       if (updateData.server) remote.server = updateData.server.trim();
-      if (updateData.share) remote.share = updateData.share.trim();
+      if (updateData.share) remote.share = remote.type === 'nfs' && !updateData.share.trim().startsWith('/') ? `/${updateData.share.trim()}` : updateData.share.trim();
       if (updateData.username !== undefined) remote.username = updateData.username && updateData.username.trim() ? updateData.username.trim() : null;
       if (updateData.password !== undefined) remote.password = updateData.password && updateData.password.trim() ? this._encryptPassword(updateData.password) : null;
       if (updateData.domain !== undefined) remote.domain = updateData.domain && updateData.domain.trim() ? updateData.domain.trim() : null;
@@ -819,13 +819,8 @@ class RemotesService {
           if (line.length === 0) continue;
 
           const parts = line.split(/\s+/);
-          if (parts.length > 0) {
-            let exportPath = parts[0];
-            // Remove leading slash for consistency
-            if (exportPath.startsWith('/')) {
-              exportPath = exportPath.substring(1);
-            }
-            shares.push(exportPath);
+          if (parts.length > 0 && parts[0].startsWith('/')) {
+            shares.push(parts[0]);
           }
         }
 
@@ -896,19 +891,22 @@ class RemotesService {
           const { stdout } = await execPromise(`timeout 5 showmount -e ${server} 2>&1`);
           const exports = stdout.split('\n');
 
+          // Normalize share for comparison: ensure leading slash
+          const normalizedShare = share.startsWith('/') ? share : `/${share}`;
+
           // Check if our share is in the exports list
           const shareFound = exports.some(line => {
             const exportPath = line.split(/\s+/)[0];
-            return exportPath === `/${share}` || exportPath === share;
+            return exportPath === normalizedShare;
           });
 
           if (!shareFound) {
-            throw new Error(`Share '/${share}' not found in NFS exports`);
+            throw new Error(`Share '${normalizedShare}' not found in NFS exports`);
           }
 
           return {
             success: true,
-            message: `Successfully connected to NFS share ${server}:/${share}`,
+            message: `Successfully connected to NFS share ${server}:${normalizedShare}`,
             type: 'nfs'
           };
         } catch (showmountError) {
