@@ -2458,14 +2458,14 @@ class MosService {
         if (services.tailscale.enabled) {
           checks.push(this._getTailscaleOnline().then(online => { services.tailscale.online = online; }));
         } else {
-          services.tailscale.online = null;
+          services.tailscale.online = false;
         }
       }
       if (services.netbird) {
         if (services.netbird.enabled) {
           checks.push(this._getNetbirdOnline().then(online => { services.netbird.online = online; }));
         } else {
-          services.netbird.online = null;
+          services.netbird.online = false;
         }
       }
       if (checks.length) await Promise.all(checks);
