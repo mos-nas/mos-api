@@ -799,15 +799,21 @@ class HubService {
    */
   async _processComposeTemplate(templateDir, maintainerInfo, repoPath) {
     const templatePath = path.join(templateDir, 'template.json');
-    const composePath = path.join(templateDir, 'compose.yaml');
     const envPath = path.join(templateDir, '.env');
 
     const template = await this._readJsonFile(templatePath);
     if (!template) return null;
 
-    // Parse compose.yaml for images
+    // Support both compose.yaml and compose.yml
+    let composePath = path.join(templateDir, 'compose.yaml');
+    let hasCompose = await this._exists(composePath);
+    if (!hasCompose) {
+      composePath = path.join(templateDir, 'compose.yml');
+      hasCompose = await this._exists(composePath);
+    }
+
+    // Parse compose file for images
     let stackImages = {};
-    const hasCompose = await this._exists(composePath);
     if (hasCompose) {
       stackImages = await this._parseComposeImages(composePath);
     }

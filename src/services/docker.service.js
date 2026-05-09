@@ -76,28 +76,33 @@ class DockerService {
         // Docker daemon not available - skip cleanup
       }
 
-      // Read templates to get shell info for each container
+      // Read templates to get shell info and no_autoupdate for each container
       const templatesDir = '/boot/config/system/docker/templates';
-      const shellMap = {};
+      const templateInfoMap = {};
       for (const image of images) {
         try {
           const templatePath = path.join(templatesDir, `${image.name}.json`);
           const templateData = await fs.readFile(templatePath, 'utf8');
           const template = JSON.parse(templateData);
-          shellMap[image.name] = this.normalizeShell(template.default_shell);
+          templateInfoMap[image.name] = {
+            default_shell: this.normalizeShell(template.default_shell),
+            no_autoupdate: template.no_autoupdate === true
+          };
         } catch (templateError) {
-          shellMap[image.name] = '/bin/sh';
+          templateInfoMap[image.name] = { default_shell: '/bin/sh', no_autoupdate: false };
         }
       }
 
       // Process each image and add update status
       return images.map(image => {
         const updateAvailable = image.local !== image.remote;
+        const info = templateInfoMap[image.name] || { default_shell: '/bin/sh', no_autoupdate: false };
 
         return {
           ...image,
           update_available: updateAvailable,
-          default_shell: shellMap[image.name]
+          default_shell: info.default_shell,
+          no_autoupdate: info.no_autoupdate
         };
       });
     } catch (error) {
@@ -254,7 +259,8 @@ class DockerService {
           updateMap[container.name] = {
             ...(container.index !== undefined && { index: container.index }),
             ...(container.autostart !== undefined && { autostart: container.autostart }),
-            ...(container.wait !== undefined && { wait: container.wait })
+            ...(container.wait !== undefined && { wait: container.wait }),
+            ...(container.no_autoupdate !== undefined && { no_autoupdate: container.no_autoupdate === true })
           };
         }
       });
@@ -272,6 +278,21 @@ class DockerService {
 
       // Write the updated container list back to the file
       await fs.writeFile(filePath, JSON.stringify(updatedContainers, null, 2), 'utf8');
+
+      // Update template files if no_autoupdate changed
+      for (const container of containers) {
+        if (container.name && container.no_autoupdate !== undefined) {
+          try {
+            const templatePath = path.join('/boot/config/system/docker/templates', `${container.name}.json`);
+            const templateData = await fs.readFile(templatePath, 'utf8');
+            const template = JSON.parse(templateData);
+            template.no_autoupdate = container.no_autoupdate === true;
+            await fs.writeFile(templatePath, JSON.stringify(template, null, 2), 'utf8');
+          } catch (err) {
+            // Template file might not exist, non-critical
+          }
+        }
+      }
 
       return updatedContainers;
     } catch (error) {
@@ -403,6 +424,8 @@ class DockerService {
 
       // Validate the template
       this.validateContainerTemplate(template);
+
+      template.no_autoupdate = template.no_autoupdate === true;
 
       // Create filename
       const fileName = `${template.name.replace(/[^A-Za-z0-9\-_.]/g, '_')}.json`;
@@ -941,6 +964,8 @@ class DockerService {
           }
         }
 
+        // no_autoupdate: show actual value only in edit mode, otherwise false (hub download)
+        template.no_autoupdate = edit ? (template.no_autoupdate === true) : false;
         return template;
       } catch (installedError) {
         // If installed template not found, try removed template
@@ -961,6 +986,8 @@ class DockerService {
               }
             }
 
+            // no_autoupdate: show actual value only in edit mode, otherwise false (hub download)
+            template.no_autoupdate = edit ? (template.no_autoupdate === true) : false;
             return template;
           } catch (removedError) {
             if (removedError.message.includes('not found')) {

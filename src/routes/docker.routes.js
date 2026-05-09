@@ -79,6 +79,11 @@ const fs = require('fs');
  *           type: string
  *           description: Restart policy
  *           example: "unless-stopped"
+ *         no_autoupdate:
+ *           type: boolean
+ *           description: Whether automatic updates are disabled for this container
+ *           default: false
+ *           example: false
  *     ContainerIndexUpdate:
  *       type: object
  *       required:

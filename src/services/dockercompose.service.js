@@ -306,7 +306,7 @@ class DockerComposeService {
    * @param {string|null} iconUrl - Icon URL
    * @returns {string} YAML content
    */
-  _generateMosOverride(services, stackName, iconUrl = null) {
+  _generateMosOverride(services, stackName, iconUrl = null, noAutoupdate = false) {
     let yaml = '# MOS Metadata - Do not edit manually\n';
     if (iconUrl) {
       yaml += `# icon_url: ${iconUrl}\n`;
@@ -318,6 +318,9 @@ class DockerComposeService {
       yaml += `    labels:\n`;
       yaml += `      mos.backend: "compose"\n`;
       yaml += `      mos.stack.name: "${stackName}"\n`;
+      if (noAutoupdate) {
+        yaml += `      mos.no_autoupdate: "true"\n`;
+      }
     });
 
     return yaml;
@@ -586,7 +589,7 @@ class DockerComposeService {
    * @param {string|null} webui - WebUI URL (null to preserve existing)
    * @returns {Promise<void>}
    */
-  async _updateStackInComposeContainers(stackName, autostart = null, webui = null) {
+  async _updateStackInComposeContainers(stackName, autostart = null, webui = null, noAutoupdate = null) {
     try {
       const composeContainers = await this._readComposeContainers();
       const services = await this._getStackContainerDetails(stackName);
@@ -594,9 +597,10 @@ class DockerComposeService {
       // Find existing stack entry
       const existingIndex = composeContainers.findIndex(s => s.stack === stackName);
 
-      // Preserve existing remote SHAs, autostart and webui if available
+      // Preserve existing remote SHAs, autostart, webui and no_autoupdate if available
       let existingAutostart = false; // Default to false
       let existingWebui = null; // Default to null
+      let existingNoAutoupdate = false; // Default to false
       if (existingIndex !== -1) {
         if (composeContainers[existingIndex].services) {
           const existingServices = composeContainers[existingIndex].services;
@@ -614,6 +618,10 @@ class DockerComposeService {
         if (composeContainers[existingIndex].webui !== undefined) {
           existingWebui = composeContainers[existingIndex].webui;
         }
+        // Preserve existing no_autoupdate if not explicitly set
+        if (composeContainers[existingIndex].no_autoupdate !== undefined) {
+          existingNoAutoupdate = composeContainers[existingIndex].no_autoupdate;
+        }
       }
 
       const normalizedWebui = this._normalizeWebui(webui);
@@ -622,6 +630,7 @@ class DockerComposeService {
         stack: stackName,
         autostart: autostart !== null ? autostart : existingAutostart,
         webui: normalizedWebui !== null ? normalizedWebui : existingWebui,
+        no_autoupdate: noAutoupdate !== null ? noAutoupdate === true : existingNoAutoupdate === true,
         services: services
       };
 
@@ -644,13 +653,18 @@ class DockerComposeService {
    * @param {string} stackName - Stack name
    * @returns {Promise<void>}
    */
-  async _syncLocalShasAfterUpgrade(stackName) {
+  async _syncLocalShasAfterUpgrade(stackName, forceUpdate = false) {
     try {
       const composeContainers = await this._readComposeContainers();
       const existingIndex = composeContainers.findIndex(s => s.stack === stackName);
 
       if (existingIndex === -1) {
         console.warn(`Stack ${stackName} not found in compose-containers`);
+        return;
+      }
+
+      // Skip sync if no_autoupdate is enabled (unless force update)
+      if (composeContainers[existingIndex].no_autoupdate === true && !forceUpdate) {
         return;
       }
 
@@ -797,9 +811,10 @@ class DockerComposeService {
    * @param {string|null} iconUrl - Icon URL (optional, PNG only)
    * @param {boolean} autostart - Autostart setting (default: false)
    * @param {string|null} webui - WebUI URL (optional)
+   * @param {boolean} noAutoupdate - No auto-update setting (default: false)
    * @returns {Promise<Object>} Created stack info
    */
-  async createStack(name, yamlContent, envContent = null, iconUrl = null, autostart = false, webui = null) {
+  async createStack(name, yamlContent, envContent = null, iconUrl = null, autostart = false, webui = null, noAutoupdate = false) {
     try {
       // Validate stack name
       this._validateStackName(name);
@@ -864,7 +879,7 @@ class DockerComposeService {
       }
 
       // Generate mos.override.yaml
-      const mosOverride = this._generateMosOverride(services, name, iconUrl);
+      const mosOverride = this._generateMosOverride(services, name, iconUrl, noAutoupdate);
       const mosOverridePath = path.join(stackPath, 'mos.override.yaml');
       await fs.writeFile(mosOverridePath, mosOverride);
 
@@ -933,7 +948,7 @@ class DockerComposeService {
       }
 
       // Update compose-containers file (even with 0 containers, so the stack entry exists)
-      await this._updateStackInComposeContainers(name, autostart, webui);
+      await this._updateStackInComposeContainers(name, autostart, webui, noAutoupdate);
 
       // Return result (even if deployment failed, files and group were created)
       const result = {
@@ -944,6 +959,7 @@ class DockerComposeService {
         iconPath: iconPath,
         autostart: autostart,
         webui: webui,
+        no_autoupdate: noAutoupdate === true,
         output: stdout || stderr || ''
       };
 
@@ -1033,10 +1049,11 @@ class DockerComposeService {
               // No mos.override.yaml, that's ok
             }
 
-            // Get autostart and webui from compose-containers
+            // Get autostart, webui and no_autoupdate from compose-containers
             const stackEntry = composeContainers.find(s => s.stack === entry.name);
             const autostart = stackEntry ? (stackEntry.autostart || false) : false;
             const webui = stackEntry ? (stackEntry.webui || null) : null;
+            const noAutoupdate = stackEntry ? (stackEntry.no_autoupdate === true) : false;
 
             // Get actual running status from docker-compose ls
             const stackStatus = projectStatuses[entry.name];
@@ -1049,6 +1066,7 @@ class DockerComposeService {
               iconUrl: iconUrl,
               autostart: autostart,
               webui: webui,
+              no_autoupdate: noAutoupdate,
               running: running
             });
           } catch (err) {
@@ -1110,11 +1128,12 @@ class DockerComposeService {
       // Get containers from working directory
       const containers = await this._getStackContainers(name);
 
-      // Get autostart and webui from compose-containers
+      // Get autostart, webui and no_autoupdate from compose-containers
       const composeContainers = await this._readComposeContainers();
       const stackEntry = composeContainers.find(s => s.stack === name);
       const autostart = stackEntry ? (stackEntry.autostart || false) : false;
       const webui = stackEntry ? (stackEntry.webui || null) : null;
+      const noAutoupdate = stackEntry ? (stackEntry.no_autoupdate === true) : false;
 
       // Get actual running status from docker-compose ls
       const projectStatuses = await this._getComposeProjectStatuses();
@@ -1130,6 +1149,7 @@ class DockerComposeService {
         iconUrl: iconUrl,
         autostart: autostart,
         webui: webui,
+        no_autoupdate: noAutoupdate,
         running: running
       };
     } catch (error) {
@@ -1145,9 +1165,10 @@ class DockerComposeService {
    * @param {string|null} iconUrl - New icon URL (optional, PNG only)
    * @param {boolean|null} autostart - Autostart setting (null to preserve existing)
    * @param {string|null|undefined} webui - WebUI URL (null to clear, undefined to preserve existing)
+   * @param {boolean|null} noAutoupdate - No auto-update setting (null to preserve existing)
    * @returns {Promise<Object>} Updated stack info
    */
-  async updateStack(name, yamlContent, envContent = null, iconUrl = null, autostart = null, webui = undefined) {
+  async updateStack(name, yamlContent, envContent = null, iconUrl = null, autostart = null, webui = undefined, noAutoupdate = null) {
     try {
       this._validateStackName(name);
 
@@ -1192,8 +1213,19 @@ class DockerComposeService {
         throw new Error('No services found in compose.yaml');
       }
 
-      // Regenerate mos.override.yaml
-      const mosOverride = this._generateMosOverride(services, name, iconUrl);
+      // Regenerate mos.override.yaml (read no_autoupdate from compose-containers to preserve it)
+      let existingNoAutoupdate = false;
+      try {
+        const cc = await this._readComposeContainers();
+        const ccEntry = cc.find(s => s.stack === name);
+        if (ccEntry) {
+          existingNoAutoupdate = ccEntry.no_autoupdate === true;
+        }
+      } catch (err) {
+        // Default to false
+      }
+      const effectiveNoAutoupdate = noAutoupdate !== null ? noAutoupdate === true : existingNoAutoupdate;
+      const mosOverride = this._generateMosOverride(services, name, iconUrl, effectiveNoAutoupdate);
       const mosOverridePath = path.join(stackPath, 'mos.override.yaml');
       await fs.writeFile(mosOverridePath, mosOverride);
 
@@ -1239,13 +1271,14 @@ class DockerComposeService {
       // Update compose-containers file (even with 0 containers, so the stack entry exists)
       // webui: undefined = preserve, null = clear, string = set
       const webuiValue = webui === undefined ? null : webui;
-      await this._updateStackInComposeContainers(name, autostart, webuiValue);
+      await this._updateStackInComposeContainers(name, autostart, webuiValue, noAutoupdate);
 
       // Get current values for response
       const composeContainers = await this._readComposeContainers();
       const stackEntry = composeContainers.find(s => s.stack === name);
       const currentAutostart = stackEntry ? stackEntry.autostart : false;
       const currentWebui = stackEntry ? stackEntry.webui : null;
+      const currentNoAutoupdate = stackEntry ? (stackEntry.no_autoupdate === true) : false;
 
       // Combine output from down and up operations
       let combinedOutput = '';
@@ -1264,6 +1297,7 @@ class DockerComposeService {
         iconPath: iconPath,
         autostart: currentAutostart,
         webui: currentWebui,
+        no_autoupdate: currentNoAutoupdate,
         output: combinedOutput || ''
       };
 
@@ -1283,6 +1317,7 @@ class DockerComposeService {
    * @param {Object} settings - Settings to update
    * @param {boolean} [settings.autostart] - Autostart setting
    * @param {string|null} [settings.webui] - WebUI URL (null to clear)
+   * @param {boolean} [settings.no_autoupdate] - No auto-update setting
    * @returns {Promise<Object>} Updated settings
    */
   async updateStackSettings(name, settings) {
@@ -1310,6 +1345,7 @@ class DockerComposeService {
           stack: name,
           autostart: settings.autostart !== undefined ? settings.autostart : false,
           webui: webuiValue !== undefined ? webuiValue : null,
+          no_autoupdate: settings.no_autoupdate !== undefined ? settings.no_autoupdate === true : false,
           services: {}
         };
         composeContainers.push(stackEntry);
@@ -1320,6 +1356,9 @@ class DockerComposeService {
         }
         if (settings.webui !== undefined) {
           composeContainers[existingIndex].webui = this._normalizeWebui(settings.webui);
+        }
+        if (settings.no_autoupdate !== undefined) {
+          composeContainers[existingIndex].no_autoupdate = settings.no_autoupdate === true;
         }
       }
 
@@ -1332,7 +1371,8 @@ class DockerComposeService {
         success: true,
         stack: name,
         autostart: updatedEntry ? updatedEntry.autostart : false,
-        webui: updatedEntry ? updatedEntry.webui : null
+        webui: updatedEntry ? updatedEntry.webui : null,
+        no_autoupdate: updatedEntry ? (updatedEntry.no_autoupdate === true) : false
       };
     } catch (error) {
       throw new Error(`Failed to update stack settings: ${error.message}`);
@@ -1635,7 +1675,7 @@ class DockerComposeService {
       const { stdout, stderr } = await execPromise(command);
 
       // Sync local SHAs to remote SHAs after successful upgrade
-      await this._syncLocalShasAfterUpgrade(name);
+      await this._syncLocalShasAfterUpgrade(name, forceUpdate);
 
       // Try to parse the output as JSON
       try {
@@ -1770,14 +1810,16 @@ class DockerComposeService {
         // File doesn't exist
       }
 
-      // Get autostart and webui from compose-containers (only for installed)
+      // Get autostart, webui and no_autoupdate from compose-containers (only for installed)
       let autostart = false;
       let webui = null;
+      let noAutoupdate = false;
       if (source === 'installed') {
         const composeContainers = await this._readComposeContainers();
         const stackEntry = composeContainers.find(s => s.stack === name);
         autostart = stackEntry ? (stackEntry.autostart || false) : false;
         webui = stackEntry ? (stackEntry.webui || null) : null;
+        noAutoupdate = stackEntry ? (stackEntry.no_autoupdate === true) : false;
       }
 
       return {
@@ -1787,6 +1829,7 @@ class DockerComposeService {
         iconUrl: iconUrl,
         autostart: autostart,
         webui: webui,
+        no_autoupdate: noAutoupdate,
         source: source
       };
     } catch (error) {

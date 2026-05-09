@@ -48,6 +48,11 @@ const dockerComposeService = require('../services/dockercompose.service');
  *           nullable: true
  *           description: WebUI URL for the stack
  *           example: "http://10.0.0.1:3001"
+ *         no_autoupdate:
+ *           type: boolean
+ *           description: Whether automatic updates are disabled for this stack
+ *           default: false
+ *           example: false
  */
 
 // Only admin can access these routes
@@ -270,7 +275,8 @@ router.post('/stacks', async (req, res) => {
     }
 
     const webuiValue = req.body.webui !== undefined ? req.body.webui : req.body.web_ui_url;
-    const result = await dockerComposeService.createStack(name, yaml, env, icon, autostart === true, webuiValue || null);
+    const noAutoupdate = req.body.no_autoupdate === true;
+    const result = await dockerComposeService.createStack(name, yaml, env, icon, autostart === true, webuiValue || null, noAutoupdate);
     res.status(201).json(result);
   } catch (error) {
     if (error.message.includes('already exists')) {
@@ -387,7 +393,8 @@ router.put('/stacks/:name', async (req, res) => {
     // webui: undefined = preserve, null = clear, string = set
     // Accept both webui and web_ui_url
     const webui = req.body.webui !== undefined ? req.body.webui : req.body.web_ui_url;
-    const result = await dockerComposeService.updateStack(name, yaml, env, icon, autostartValue, webui);
+    const noAutoupdate = req.body.no_autoupdate !== undefined ? req.body.no_autoupdate === true : null;
+    const result = await dockerComposeService.updateStack(name, yaml, env, icon, autostartValue, webui, noAutoupdate);
     res.json(result);
   } catch (error) {
     if (error.message.includes('not found')) {
@@ -474,6 +481,9 @@ router.patch('/stacks/:name', async (req, res) => {
     const webui = req.body.webui !== undefined ? req.body.webui : req.body.web_ui_url;
     if (webui !== undefined) {
       settings.webui = webui; // null clears, string sets
+    }
+    if (req.body.no_autoupdate !== undefined) {
+      settings.no_autoupdate = req.body.no_autoupdate === true;
     }
 
     const result = await dockerComposeService.updateStackSettings(name, settings);
