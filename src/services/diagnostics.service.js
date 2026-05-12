@@ -33,6 +33,8 @@ const collectors = [
   { type: 'service', call: () => getService('disks').getAllDisks(), target: 'api/disks.json' },
   { type: 'service', call: () => getService('shares').getShares(), target: 'api/shares.json' },
   { type: 'service', call: () => getService('cron').getCronJobs(), target: 'api/cron.json' },
+  { type: 'service', call: () => getService('mos').getAllServiceStatus(), target: 'api/services.json' },
+  { type: 'service', call: () => getService('mos').getMappedSensors(), target: 'api/sensors.json' },
 
   // Raw config files
   { type: 'file', source: '/etc/mos-release.json', target: 'mos-release.json' },
@@ -66,11 +68,13 @@ const collectors = [
   { type: 'file', source: '/var/log/boot', target: 'logs/boot.txt' },
   { type: 'file', source: '/var/log/docker', target: 'logs/docker.txt' },
   { type: 'file', source: '/var/log/syslog', target: 'logs/syslog.txt' },
+  { type: 'file', source: '/var/log/samba/samba.log', target: 'logs/samba.txt' },
   { type: 'file', source: '/etc/exports', target: 'nfs/exports.txt' },
 
   // Directories
   { type: 'directory', source: '/var/log/libvirt', target: 'logs/libvirt' },
   { type: 'directory', source: '/var/log/libvirt/qemu', target: 'logs/qemu' },
+  { type: 'directory', source: '/boot/config/snapraid', target: 'config/snapraid' },
 
   // System commands
   { type: 'command', command: 'tree /boot 2>/dev/null', target: 'boot_tree.txt' },
@@ -89,6 +93,7 @@ const collectors = [
   { type: 'command', command: 'lspci -knn 2>/dev/null', target: 'system/lspci.txt' },
   { type: 'command', command: `lspci -vv 2>/dev/null | awk -b '/ASPM/{print $0}' RS= | grep -P '(^[a-z0-9:.]+|ASPM |Disabled;|Enabled;)'`, target: 'system/aspm.txt' },
   { type: 'command', command: 'lsusb -vt 2>/dev/null', target: 'system/lsusb.txt' },
+  { type: 'command', command: 'ip -br addr | grep -vE "^(veth|docker0|virbr|tunl0|br-[a-f0-9]{12}|lxcbr)"', target: 'system/interfaces.txt' },
 ];
 
 class DiagnosticsService {
