@@ -1166,9 +1166,6 @@ class SmartService {
         ''
       ];
 
-      const quietFlag = this.config.smartdOptions?.quietMode
-        ? `-q ${this.config.smartdOptions.quietMode}` : '';
-
       const hasCustomDisks = Object.values(this.config.disks).some(d => {
         const defaults = this.config.defaults.temperatureLimits[d.diskType] ||
                          this.config.defaults.temperatureLimits.hdd;
@@ -1181,7 +1178,7 @@ class SmartService {
         const defaultLimits = this.config.defaults.temperatureLimits.hdd;
         const attrFlags = this.config.defaults.monitoredAttributes.map(id => `-R ${id}`).join(' ');
         lines.push(
-          `DEVICESCAN -n standby,q ${quietFlag} -W 5,${defaultLimits.warning},${defaultLimits.critical} ${attrFlags}`.replace(/\s+/g, ' ').trim()
+          `DEVICESCAN -n standby,q -W 5,${defaultLimits.warning},${defaultLimits.critical} ${attrFlags}`
         );
       } else {
         const byIdPaths = await this._getDeviceByIdPaths();
@@ -1201,10 +1198,8 @@ class SmartService {
             .map(id => `-R ${id}`).join(' ');
           const w = diskConf.temperatureWarning;
           const c = diskConf.temperatureCritical;
-
-          lines.push(
-            `${devicePath} -n standby,q ${quietFlag} -W 5,${w},${c} ${attrFlags}`.replace(/\s+/g, ' ').trim()
-          );
+          const dType = { nvme: 'nvme', sata: 'sat', sas: 'scsi', usb: 'sat' }[deviceInfo.tran] || 'auto';
+          lines.push(`${devicePath} -d ${dType} -n standby,q -W 5,${w},${c} ${attrFlags}`);
         }
       }
 
