@@ -52,7 +52,7 @@ class Config {
         envVars = {
           PORT: '998',
           JWT_SECRET: jwtSecret,
-          JWT_EXPIRY_DAYS: '1',
+          JWT_EXPIRY_DAYS: '7',
           RATE_LIMIT_WINDOW: '1',
           RATE_LIMIT_MAX: '20',
           RATE_LIMIT_MAX_LOGIN: '5',
