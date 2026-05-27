@@ -56,6 +56,10 @@ const sharesService = require('../services/shares.service');
  *           type: boolean
  *           description: Show in network browse list
  *           example: true
+ *         allow_execute_always:
+ *           type: boolean
+ *           description: Allow execute permission on all files (acl_allow_execute_always)
+ *           example: false
  *         write_list:
  *           type: array
  *           items:
@@ -169,6 +173,11 @@ const sharesService = require('../services/shares.service');
  *           description: Case sensitive filenames
  *           default: true
  *           example: true
+ *         allow_execute_always:
+ *           type: boolean
+ *           description: Allow execute permission on all files (acl_allow_execute_always)
+ *           default: false
+ *           example: false
  *         comment:
  *           type: string
  *           nullable: true
@@ -373,6 +382,10 @@ const sharesService = require('../services/shares.service');
  *             type: string
  *           description: List of valid users
  *           example: ["user1", "user2"]
+ *         allow_execute_always:
+ *           type: boolean
+ *           description: Allow execute permission on all files (acl_allow_execute_always)
+ *           example: false
  *         comment:
  *           type: string
  *           nullable: true
@@ -1036,6 +1049,7 @@ router.post('/smb', checkRole(['admin']), async (req, res) => {
       hide_dot_files = false,
       preserve_case = true,
       case_sensitive = true,
+      allow_execute_always = false,
       comment = null,
       policies = [],
       createDirectory = true,
@@ -1111,6 +1125,7 @@ router.post('/smb', checkRole(['admin']), async (req, res) => {
       hide_dot_files,
       preserve_case,
       case_sensitive,
+      allow_execute_always,
       comment,
       policies,
       createDirectory,

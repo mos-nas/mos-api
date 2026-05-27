@@ -3396,8 +3396,8 @@ class DisksService {
         return { uuid: null, label: null, filesystem: null };
       }
 
-      const uuidMatch = stdout.match(/UUID="([^"]+)"/);
-      const labelMatch = stdout.match(/LABEL="([^"]+)"/);
+      const uuidMatch = stdout.match(/(?<![A-Z])UUID="([^"]+)"/);
+      const labelMatch = stdout.match(/(?<!PART)LABEL="([^"]+)"/);
       const typeMatch = stdout.match(/TYPE="([^"]+)"/);
 
       return {
@@ -3411,22 +3411,60 @@ class DisksService {
   }
 
   /**
+   * Gets the serial number of a disk via lsblk (safe, no disk wakeup)
+   * @param {string} device - Device path or name (e.g., /dev/sdb1 or sdb)
+   * @returns {Promise<string|null>} Serial number or null
+   * @private
+   */
+  async _getDeviceSerial(device) {
+    try {
+      const baseDisk = this._getBaseDisk(
+        device.startsWith('/dev/') ? device : `/dev/${device}`
+      );
+      const { stdout } = await execPromise(`lsblk -dno SERIAL ${baseDisk} 2>/dev/null`);
+      const serial = stdout.trim();
+      return serial || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Creates a unique mount point name based on device information
    */
   async _generateMountPointName(device) {
     const deviceInfo = await this._getDeviceUuidAndLabel(device);
     const deviceName = device.replace('/dev/', '');
 
-    // Priority: 1. Label, 2. UUID (short), 3. Device-Name
-    if (deviceInfo.label) {
+    // Priority: 1. Label (non-generic), 2. Serial, 3. UUID (short), 4. Device-Name
+    const genericLabels = ['primary', 'data', 'disk', 'partition', 'volume', 'linux', 'root'];
+    if (deviceInfo.label && !genericLabels.includes(deviceInfo.label.toLowerCase())) {
       // Sanitize label for filesystem
       return deviceInfo.label.replace(/[^a-zA-Z0-9_-]/g, '_');
-    } else if (deviceInfo.uuid) {
-      // Use the first 8 characters of the UUID
-      return deviceInfo.uuid.substring(0, 8);
-    } else {
-      return deviceName;
     }
+
+    const serial = await this._getDeviceSerial(device);
+    if (serial) {
+      const safeName = serial.replace(/[^a-zA-Z0-9_-]/g, '_');
+      // For partitions on multi-partition disks: append partition number to avoid collisions
+      const devicePath = device.startsWith('/dev/') ? device : `/dev/${device}`;
+      const baseDisk = this._getBaseDisk(devicePath);
+      if (devicePath !== baseDisk) {
+        const allPartitions = await this._getPartitions(baseDisk);
+        const realPartitions = allPartitions.filter(p => !p.isWholeDisk);
+        if (realPartitions.length > 1) {
+          const partSuffix = deviceName.replace(baseDisk.replace('/dev/', ''), '');
+          return `${safeName}_${partSuffix}`;
+        }
+      }
+      return safeName;
+    }
+
+    if (deviceInfo.uuid) {
+      return deviceInfo.uuid.substring(0, 8);
+    }
+
+    return deviceName;
   }
 
   /**

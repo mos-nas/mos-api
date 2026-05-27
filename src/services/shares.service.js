@@ -295,6 +295,11 @@ class SharesService {
       return share;
     }
 
+    // Ensure allow_execute_always is always present for SMB shares (default: false)
+    if (share.allow_execute_always === undefined) {
+      share.allow_execute_always = false;
+    }
+
     // Check if path starts with /mnt/
     if (share.path.startsWith('/mnt/')) {
       const poolName = this._extractPoolNameFromPath(share.path);
@@ -345,6 +350,7 @@ class SharesService {
       hide_dot_files = false,
       preserve_case = true,
       case_sensitive = true,
+      allow_execute_always = false,
       comment = null,
       policies = [],
       target_devices = null
@@ -372,6 +378,7 @@ class SharesService {
       hide_dot_files,
       preserve_case,
       case_sensitive,
+      allow_execute_always,
       comment,
       policies: Array.isArray(policies) ? policies : []
     };
