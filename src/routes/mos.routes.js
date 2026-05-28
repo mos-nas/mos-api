@@ -236,6 +236,28 @@ const { checkRole } = require('../middleware/auth.middleware');
  *           type: integer
  *           description: Wait time before starting VMs
  *           example: 30
+ *         hugepages:
+ *           type: object
+ *           description: Hugepages configuration and runtime info
+ *           properties:
+ *             enabled:
+ *               type: boolean
+ *               description: Whether hugepages are enabled
+ *               example: true
+ *             total:
+ *               type: integer
+ *               description: Number of hugepages to allocate (set via sysctl)
+ *               example: 1024
+ *             size_mb:
+ *               type: integer
+ *               description: Size of each hugepage in MB (read-only, from system)
+ *               readOnly: true
+ *               example: 2
+ *             free:
+ *               type: integer
+ *               description: Number of currently free hugepages (read-only, from system)
+ *               readOnly: true
+ *               example: 512
  *     NetworkSettings:
  *       type: object
  *       properties:
@@ -847,6 +869,11 @@ router.post('/settings/lxc', async (req, res) => {
  *               directory: "/mnt/pool1/vm"
  *               vdisk_directory: "/mnt/pool1/vdisk"
  *               start_wait: 30
+ *               hugepages:
+ *                 enabled: true
+ *                 total: 1024
+ *                 size_mb: 2
+ *                 free: 512
  *       401:
  *         description: Not authenticated
  *         content:
@@ -883,11 +910,20 @@ router.post('/settings/lxc', async (req, res) => {
  *         application/json:
  *           schema:
  *             $ref: '#/components/schemas/SettingsUpdateRequest'
- *           example:
- *             enabled: true
- *             directory: "/mnt/pool1/vm"
- *             vdisk_directory: "/mnt/pool1/vdisk"
- *             start_wait: 45
+ *           examples:
+ *             basic:
+ *               summary: Update basic VM settings
+ *               value:
+ *                 enabled: true
+ *                 directory: "/mnt/pool1/vm"
+ *                 vdisk_directory: "/mnt/pool1/vdisk"
+ *                 start_wait: 45
+ *             hugepages:
+ *               summary: Enable hugepages with 1024 pages
+ *               value:
+ *                 hugepages:
+ *                   enabled: true
+ *                   total: 1024
  *     responses:
  *       200:
  *         description: VM settings updated successfully

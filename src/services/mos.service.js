@@ -1730,6 +1730,42 @@ class MosService {
   }
 
   /**
+   * Reads hugepage information from /proc/meminfo
+   * @returns {Promise<Object>} Hugepage runtime info { size_mb, total, free }
+   * @private
+   */
+  async _getHugepagesInfo() {
+    try {
+      const meminfo = await fs.readFile('/proc/meminfo', 'utf8');
+      const lines = meminfo.split('\n');
+
+      let sizeKb = 0;
+      let total = 0;
+      let free = 0;
+
+      for (const line of lines) {
+        const match = line.match(/^(\S+):\s+(\d+)/);
+        if (!match) continue;
+        const key = match[1];
+        const value = parseInt(match[2], 10);
+
+        if (key === 'Hugepagesize') sizeKb = value;
+        else if (key === 'HugePages_Total') total = value;
+        else if (key === 'HugePages_Free') free = value;
+      }
+
+      return {
+        size_mb: Math.round(sizeKb / 1024),
+        total,
+        free
+      };
+    } catch (error) {
+      console.error('Error reading hugepages info:', error.message);
+      return { size_mb: 2, total: 0, free: 0 };
+    }
+  }
+
+  /**
    * Returns the default VM settings structure with all expected fields
    * @returns {Promise<Object>} Default VM settings
    */
@@ -1741,7 +1777,11 @@ class MosService {
       enabled: false,
       directory: defaultPaths ? defaultPaths.vm.directory : null,
       vdisk_directory: defaultPaths ? defaultPaths.vm.vdisk_directory : null,
-      start_wait: 0
+      start_wait: 0,
+      hugepages: {
+        enabled: false,
+        total: 0
+      }
     };
   }
 
@@ -1761,8 +1801,11 @@ class MosService {
       } catch (error) {
         if (error.code === 'ENOENT') {
           console.warn('vm.json not found, returning defaults');
-          // Inject iommu_active (runtime-only, not saved to file)
+          // Inject runtime-only fields (not saved to file)
           defaults.iommu_active = await this._checkIommuActive();
+          const hpInfo = await this._getHugepagesInfo();
+          defaults.hugepages.size_mb = hpInfo.size_mb;
+          defaults.hugepages.free = hpInfo.free;
           return defaults;
         }
         throw error;
@@ -1785,8 +1828,12 @@ class MosService {
         }
       }
 
-      // Inject iommu_active (runtime-only, not saved to file)
+      // Inject runtime-only fields (not saved to file)
       settings.iommu_active = await this._checkIommuActive();
+      const hpInfo = await this._getHugepagesInfo();
+      if (!settings.hugepages) settings.hugepages = { enabled: false, total: 0 };
+      settings.hugepages.size_mb = hpInfo.size_mb;
+      settings.hugepages.free = hpInfo.free;
 
       return settings;
     } catch (error) {
@@ -1799,7 +1846,8 @@ class MosService {
 
   /**
    * Writes new values to the vm.json. Only the passed fields are changed.
-   * If enabled is changed, the libvirtd service is stopped/started.
+   * Service restart only occurs when relevant fields actually change.
+   * Hugepages changes are applied via sysctl and verified.
    * @param {Object} updates - The fields to update
    * @returns {Promise<Object>} The updated settings
    */
@@ -1817,11 +1865,16 @@ class MosService {
       } catch (error) {
         if (error.code !== 'ENOENT') throw error;
       }
+
       // Remove read-only fields that may come from GET response
       delete updates.iommu_active;
+      if (updates.hugepages) {
+        delete updates.hugepages.size_mb;
+        delete updates.hugepages.free;
+      }
 
       // Only allowed fields are updated
-      const allowed = ['enabled', 'directory', 'vdisk_directory', 'start_wait'];
+      const allowed = ['enabled', 'directory', 'vdisk_directory', 'start_wait', 'hugepages'];
 
       // Check directory paths for mount status
       // Always validate 'directory' to catch legacy nonraid/mergerfs paths
@@ -1847,38 +1900,95 @@ class MosService {
         }
       }
 
+      // Validate hugepages if provided
+      if (updates.hugepages !== undefined) {
+        if (typeof updates.hugepages !== 'object' || updates.hugepages === null) {
+          throw new Error('hugepages must be an object with enabled (boolean) and total (integer)');
+        }
+        if (updates.hugepages.enabled !== undefined && typeof updates.hugepages.enabled !== 'boolean') {
+          throw new Error('hugepages.enabled must be a boolean');
+        }
+        if (updates.hugepages.total !== undefined) {
+          if (!Number.isInteger(updates.hugepages.total) || updates.hugepages.total < 0) {
+            throw new Error('hugepages.total must be a non-negative integer');
+          }
+        }
+      }
+
+      // Snapshot previous values to detect changes
+      const prevEnabled = current.enabled;
+      const prevDirectory = current.directory;
+      const prevVdiskDirectory = current.vdisk_directory;
+      const prevHugepagesEnabled = current.hugepages ? current.hugepages.enabled : false;
+      const prevHugepagesTotal = current.hugepages ? current.hugepages.total : 0;
+
       for (const key of Object.keys(updates)) {
         if (!allowed.includes(key)) {
           throw new Error(`Invalid field: ${key}`);
         }
-        current[key] = updates[key];
+        if (key === 'hugepages') {
+          // Merge hugepages sub-object
+          if (!current.hugepages) current.hugepages = { enabled: false, total: 0 };
+          if (updates.hugepages.enabled !== undefined) current.hugepages.enabled = updates.hugepages.enabled;
+          if (updates.hugepages.total !== undefined) current.hugepages.total = updates.hugepages.total;
+        } else {
+          current[key] = updates[key];
+        }
       }
+
+      // Determine what changed
+      const vmServiceChanged = (
+        current.enabled !== prevEnabled ||
+        current.directory !== prevDirectory ||
+        current.vdisk_directory !== prevVdiskDirectory
+      );
+      const hugepagesEnabledChanged = current.hugepages.enabled !== prevHugepagesEnabled;
+      const hugepagesTotalChanged = current.hugepages.total !== prevHugepagesTotal;
+      const hugepagesChanged = hugepagesEnabledChanged || hugepagesTotalChanged;
 
       // Write the file
       await fs.writeFile('/boot/config/vm.json', JSON.stringify(current, null, 2), 'utf8');
 
-      // libvirtd service stop/start on configuration changes
-      try {
-        // VM services always stop when configuration is changed
-        // Ignore errors on stop (e.g. if service is already stopped)
+      // Apply hugepages via sysctl if changed
+      if (hugepagesChanged) {
+        const targetTotal = current.hugepages.enabled ? current.hugepages.total : 0;
         try {
-          await execPromise('/etc/init.d/libvirtd stop');
-        } catch (stopError) {
-          // Ignore stop errors (service could already be stopped)
+          await execPromise(`sysctl -w vm.nr_hugepages=${targetTotal}`);
+        } catch (sysctlError) {
+          throw new Error(`Failed to set hugepages via sysctl: ${sysctlError.message}`);
         }
 
-        try {
-          await execPromise('/etc/init.d/virtlogd stop');
-        } catch (stopError) {
-          // Ignore stop errors (service could already be stopped)
+        // Verify the change was applied successfully
+        const hpInfo = await this._getHugepagesInfo();
+        if (hpInfo.total !== targetTotal) {
+          throw new Error(
+            `Failed to allocate hugepages: requested ${targetTotal} but only ${hpInfo.total} could be allocated (insufficient contiguous memory)`
+          );
         }
+      }
 
-        // VM services only start if enabled = true (mos-start reads the new file)
-        if (current.enabled === true) {
-          await execPromise('/usr/local/bin/mos-start vm');
+      // Restart libvirtd only if VM service-relevant fields changed
+      if (vmServiceChanged) {
+        try {
+          try {
+            await execPromise('/etc/init.d/libvirtd stop');
+          } catch (stopError) {
+            // Ignore stop errors (service could already be stopped)
+          }
+
+          try {
+            await execPromise('/etc/init.d/virtlogd stop');
+          } catch (stopError) {
+            // Ignore stop errors (service could already be stopped)
+          }
+
+          // VM services only start if enabled = true (mos-start reads the new file)
+          if (current.enabled === true) {
+            await execPromise('/usr/local/bin/mos-start vm');
+          }
+        } catch (error) {
+          throw new Error(`Error restarting vm service: ${error.message}`);
         }
-      } catch (error) {
-        throw new Error(`Error restarting vm service: ${error.message}`);
       }
 
       return current;
