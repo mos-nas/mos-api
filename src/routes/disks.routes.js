@@ -522,6 +522,7 @@ router.get('/', authenticateToken, async (req, res) => {
     const disks = await disksService.getAllDisks(options, req.user);
     for (const disk of disks) {
       disk.smartWarning = disk.serial ? smartService.hasDiskWarning(disk.serial) : false;
+      disk.temperatureStatus = disk.serial ? smartService.getDiskTemperatureStatus(disk.serial) : null;
     }
     res.json(disks);
   } catch (error) {

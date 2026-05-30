@@ -307,6 +307,21 @@ class PoolWebSocketManager {
       // Use pools service with same filtering as REST API GET /pools
       const pools = await this.poolsService.listPools(filters, user);
 
+      // Enrich with SMART data (smartWarning + temperatureStatus) - same as REST API
+      const smartService = require('../services/smart.service');
+      for (const pool of pools) {
+        for (const device of pool.data_devices || []) {
+          const serial = device.diskInfo?.diskSerial;
+          device.smartWarning = serial ? smartService.hasDiskWarning(serial) : false;
+          device.temperatureStatus = serial ? smartService.getDiskTemperatureStatus(serial) : null;
+        }
+        for (const device of pool.parity_devices || []) {
+          const serial = device.diskInfo?.diskSerial;
+          device.smartWarning = serial ? smartService.hasDiskWarning(serial) : false;
+          device.temperatureStatus = serial ? smartService.getDiskTemperatureStatus(serial) : null;
+        }
+      }
+
       // Cache the result
       this.dataCache.set(cacheKey, {
         data: pools,

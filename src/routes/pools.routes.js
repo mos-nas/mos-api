@@ -77,6 +77,11 @@ const poolsService = new PoolsService();
  *               smartWarning:
  *                 type: boolean
  *                 description: True if any monitored SMART attribute has a non-zero value
+ *               temperatureStatus:
+ *                 type: string
+ *                 nullable: true
+ *                 enum: [null, warning, critical]
+ *                 description: Temperature threshold status (null=no data/OK, warning=warning threshold exceeded, critical=critical threshold exceeded)
  *         parity_devices:
  *           type: array
  *           description: Parity devices in the pool
@@ -297,10 +302,12 @@ router.get('/', authenticateToken, async (req, res) => {
       for (const device of pool.data_devices || []) {
         const serial = device.diskInfo?.diskSerial;
         device.smartWarning = serial ? smartService.hasDiskWarning(serial) : false;
+        device.temperatureStatus = serial ? smartService.getDiskTemperatureStatus(serial) : null;
       }
       for (const device of pool.parity_devices || []) {
         const serial = device.diskInfo?.diskSerial;
         device.smartWarning = serial ? smartService.hasDiskWarning(serial) : false;
+        device.temperatureStatus = serial ? smartService.getDiskTemperatureStatus(serial) : null;
       }
     }
 
@@ -398,10 +405,12 @@ router.get('/:id', authenticateToken, async (req, res) => {
     for (const device of pool.data_devices || []) {
       const serial = device.diskInfo?.diskSerial;
       device.smartWarning = serial ? smartService.hasDiskWarning(serial) : false;
+      device.temperatureStatus = serial ? smartService.getDiskTemperatureStatus(serial) : null;
     }
     for (const device of pool.parity_devices || []) {
       const serial = device.diskInfo?.diskSerial;
       device.smartWarning = serial ? smartService.hasDiskWarning(serial) : false;
+      device.temperatureStatus = serial ? smartService.getDiskTemperatureStatus(serial) : null;
     }
 
     res.json(pool);

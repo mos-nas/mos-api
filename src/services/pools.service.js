@@ -49,8 +49,211 @@ class PoolsService {
       intervalId: null
     };
 
+    // Udev disk offline monitor (singleton: only one monitor across all instances)
+    if (!PoolsService._udevMonitorStarted) {
+      PoolsService._udevMonitor = null;
+      PoolsService._udevAlertedDevices = new Set();
+      PoolsService._udevDeviceMap = new Map(); // uuid/id -> { device, poolName }
+      PoolsService._udevRestartCount = 0;
+      PoolsService._udevMaxRestarts = 5;
+
+      // Kill orphans from previous runs (sync: must complete before spawn)
+      try { require('child_process').execSync('pkill -f "udevadm monitor --kernel --subsystem-match=block --property" 2>/dev/null || true'); } catch {}
+
+      this._startUdevDiskMonitor();
+      this._refreshUdevDeviceMap();
+
+      // Clean shutdown handler (once)
+      const cleanup = () => this._stopUdevDiskMonitor();
+      process.on('exit', cleanup);
+      process.on('SIGTERM', cleanup);
+      process.on('SIGINT', cleanup);
+
+      PoolsService._udevMonitorStarted = true;
+    }
+
     // Initialize NonRAID monitor on startup (check if operation is already running)
     this._initNonRaidMonitor();
+  }
+
+  /**
+   * Start udev monitor to detect block device removal events.
+   * When a disk that belongs to a mounted pool disappears, an alert notification is sent.
+   * @private
+   */
+  _startUdevDiskMonitor() {
+    try {
+      PoolsService._udevMonitor = spawn('udevadm', [
+        'monitor', '--kernel', '--subsystem-match=block', '--property'
+      ], { stdio: ['ignore', 'pipe', 'ignore'] });
+
+      let buffer = '';
+
+      PoolsService._udevMonitor.stdout.on('data', (data) => {
+        buffer += data.toString();
+
+        // udev events are separated by blank lines
+        const blocks = buffer.split('\n\n');
+        // Keep the last incomplete block in the buffer
+        buffer = blocks.pop() || '';
+
+        for (const block of blocks) {
+          this._handleUdevBlock(block);
+        }
+      });
+
+      PoolsService._udevMonitor.on('error', (err) => {
+        console.warn(`[PoolsService] udev monitor failed to start: ${err.message}`);
+        PoolsService._udevMonitor = null;
+      });
+
+      PoolsService._udevMonitor.on('exit', (code) => {
+        // Don't restart if we stopped it intentionally (null = intentional stop)
+        if (!PoolsService._udevMonitor) return;
+        PoolsService._udevMonitor = null;
+
+        // Respect restart limit to prevent crash loops
+        PoolsService._udevRestartCount++;
+        if (PoolsService._udevRestartCount > PoolsService._udevMaxRestarts) {
+          console.error(`[PoolsService] udev monitor exceeded max restarts (${PoolsService._udevMaxRestarts}), giving up`);
+          return;
+        }
+
+        console.warn(`[PoolsService] udev monitor exited (code ${code}), restarting in 5s... (${PoolsService._udevRestartCount}/${PoolsService._udevMaxRestarts})`);
+        setTimeout(() => this._startUdevDiskMonitor(), 5000);
+      });
+
+      // Reset restart counter on successful start (process stays alive > 10s)
+      setTimeout(() => {
+        if (PoolsService._udevMonitor) {
+          PoolsService._udevRestartCount = 0;
+        }
+      }, 10000);
+    } catch (err) {
+      console.warn(`[PoolsService] Could not start udev monitor: ${err.message}`);
+    }
+  }
+
+  /**
+   * Stop the udev disk monitor
+   * @private
+   */
+  _stopUdevDiskMonitor() {
+    if (PoolsService._udevMonitor) {
+      const proc = PoolsService._udevMonitor;
+      PoolsService._udevMonitor = null; // prevent restart in exit handler
+      proc.kill('SIGTERM');
+      PoolsService._udevMonitorStarted = false;
+    }
+  }
+
+  /**
+   * Handle a single udev event block from udevadm monitor --property output
+   * @param {string} block - Raw udev event text block
+   * @private
+   */
+  _handleUdevBlock(block) {
+    // Only care about remove events
+    if (!block.includes('ACTION=remove')) return;
+
+    // Must be a disk or partition
+    if (!block.includes('DEVTYPE=disk') && !block.includes('DEVTYPE=partition')) return;
+
+    // Extract device path (DEVNAME=/dev/sdX or /dev/sdX1)
+    const devMatch = block.match(/DEVNAME=(.+)/);
+    if (!devMatch) return;
+
+    const removedDevice = devMatch[1].trim();
+
+    // Check against mounted pools (async, fire-and-forget)
+    this._checkRemovedDeviceAgainstPools(removedDevice)
+      .catch(err => console.warn(`[PoolsService] Disk offline check error: ${err.message}`));
+  }
+
+  /**
+   * Refresh the UUID/ID → device path map for all pools.
+   * Called on startup and after mount/unmount so we always have a current
+   * mapping even if the device symlink disappears before we can read it.
+   * @private
+   */
+  async _refreshUdevDeviceMap() {
+    try {
+      const pools = await this._readPools();
+      const map = new Map();
+
+      for (const pool of pools) {
+        const allDevices = [
+          ...(pool.data_devices || []).map(d => ({ ...d, _isParity: false })),
+          ...(pool.parity_devices || []).map(d => ({ ...d, _isParity: true }))
+        ];
+
+        for (const dev of allDevices) {
+          if (!dev.id) continue;
+
+          let resolvedPath = null;
+          if (pool.type === 'nonraid' && dev._isParity) {
+            resolvedPath = await this.getRealDevicePathFromId(dev.id);
+          } else {
+            resolvedPath = await this.getRealDevicePathFromUuid(dev.id);
+          }
+
+          if (resolvedPath) {
+            map.set(dev.id, { device: resolvedPath, poolName: pool.name, poolId: pool.id });
+          }
+        }
+      }
+
+      PoolsService._udevDeviceMap = map;
+    } catch (err) {
+      // Silent: pools.json might not exist yet
+    }
+  }
+
+  /**
+   * Check if a removed device belongs to any mounted pool and send alert.
+   * Uses the pre-built device map so UUID symlinks don't need to be live.
+   * @param {string} removedDevice - The device path that was removed (e.g. /dev/sdj1)
+   * @private
+   */
+  async _checkRemovedDeviceAgainstPools(removedDevice) {
+    // Dedup: don't send multiple alerts for the same device
+    if (PoolsService._udevAlertedDevices.has(removedDevice)) return;
+
+    // Also derive the base disk (e.g. /dev/sdj from /dev/sdj1)
+    const baseDisk = this._getBaseDiskFromPartition(removedDevice);
+
+    // Search the cached device map for a match
+    let matchedPoolName = null;
+
+    for (const [, entry] of PoolsService._udevDeviceMap) {
+      const cachedBase = this._getBaseDiskFromPartition(entry.device);
+      if (entry.device === removedDevice || entry.device === baseDisk ||
+          cachedBase === baseDisk) {
+        matchedPoolName = entry.poolName;
+        break;
+      }
+    }
+
+    if (!matchedPoolName) return;
+
+    // Only alert if pool is currently mounted
+    try {
+      const mountPoint = path.join(this.mountBasePath, matchedPoolName);
+      const isMounted = await this._isMounted(mountPoint);
+      if (!isMounted) return;
+    } catch {
+      return;
+    }
+
+    // Mark as alerted and send notification
+    PoolsService._udevAlertedDevices.add(removedDevice);
+
+    console.warn(`[PoolsService] Disk ${removedDevice} from Pool ${matchedPoolName} went offline!`);
+    sendNotification(
+      'Pool',
+      `Disk ${removedDevice} from Pool ${matchedPoolName} went offline`,
+      'alert'
+    ).catch(err => console.warn(`[PoolsService] Failed to send disk offline notification: ${err.message}`));
   }
 
   /**
@@ -3340,6 +3543,11 @@ class PoolsService {
         }
       }
 
+      // Refresh device map so udev monitor knows about this pool's devices
+      this._refreshUdevDeviceMap().catch(() => {});
+      // Clear any previous offline alerts for devices in this pool (disk came back)
+      PoolsService._udevAlertedDevices.clear();
+
       return result;
     } catch (error) {
       throw new Error(`Error mounting pool: ${error.message}`);
@@ -3607,30 +3815,37 @@ class PoolsService {
         }
       }
 
+      let result;
+
       // For single device pools
       if (pool.data_devices && pool.data_devices.length === 1 &&
           ['ext4', 'xfs', 'btrfs', 'vfat'].includes(pool.type)) {
-        return await this._unmountSingleDevicePool(pool, options.force);
+        result = await this._unmountSingleDevicePool(pool, options.force);
       }
 
       // For multi-device BTRFS pools
       else if (pool.type === 'btrfs' && pool.data_devices && pool.data_devices.length > 1) {
-        return await this._unmountMultiDeviceBtrfsPool(pool, options.force);
+        result = await this._unmountMultiDeviceBtrfsPool(pool, options.force);
       }
 
       // For MergerFS pools
       else if (pool.type === 'mergerfs') {
-        return await this._unmountMergerFSPool(pool, options.force);
+        result = await this._unmountMergerFSPool(pool, options.force);
       }
 
       // For NonRAID pools
       else if (pool.type === 'nonraid') {
-        return await this._unmountNonRaidPool(pool, options.force);
+        result = await this._unmountNonRaidPool(pool, options.force);
       }
 
       else {
         throw new Error(`Unmounting for pool type "${pool.type}" is not implemented yet`);
       }
+
+      // Refresh device map (unmounted pool disks should no longer trigger alerts)
+      this._refreshUdevDeviceMap().catch(() => {});
+
+      return result;
     } catch (error) {
       throw new Error(`Error unmounting pool: ${error.message}`);
     }

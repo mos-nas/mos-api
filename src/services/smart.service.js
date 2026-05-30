@@ -1206,7 +1206,20 @@ class SmartService {
       }
 
       lines.push('');
-      await fs.writeFile(SMARTD_CONF_PATH, lines.join('\n'), 'utf8');
+      const newContent = lines.join('\n');
+
+      // Only write and reload if functional content changed (skip timestamp line for comparison)
+      try {
+        const existing = await fs.readFile(SMARTD_CONF_PATH, 'utf8');
+        const stripTimestamp = (s) => s.replace(/^# Last generated:.*$/m, '');
+        if (stripTimestamp(existing) === stripTimestamp(newContent)) {
+          return; // No functional change → skip reload to avoid waking disks
+        }
+      } catch {
+        // File doesn't exist yet → write it
+      }
+
+      await fs.writeFile(SMARTD_CONF_PATH, newContent, 'utf8');
       await this._reloadSmartd();
     } catch (error) {
       console.warn(`[SmartService] Failed to generate smartd.conf: ${error.message}`);
@@ -1360,6 +1373,23 @@ class SmartService {
     if (!serial || !this.config) return false;
     const diskConf = this.config.disks[serial];
     return this._hasDiskWarning(serial, diskConf || {});
+  }
+
+  /**
+   * Get temperature status for a disk by serial number (for external use, e.g. pools)
+   * @param {string} serial - Disk serial number
+   * @returns {null|"warning"|"critical"} null if no temp data, "warning" or "critical" if thresholds exceeded
+   */
+  getDiskTemperatureStatus(serial) {
+    if (!serial || !this.config) return null;
+    const diskConf = this.config.disks[serial];
+    if (!diskConf) return null;
+    const state = this.diskState.get(serial);
+    if (!state || state.temperatureCurrent === null || state.temperatureCurrent === undefined) return null;
+    const temp = state.temperatureCurrent;
+    if (diskConf.temperatureCritical && temp >= diskConf.temperatureCritical) return 'critical';
+    if (diskConf.temperatureWarning && temp >= diskConf.temperatureWarning) return 'warning';
+    return null;
   }
 
   /**

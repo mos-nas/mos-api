@@ -494,6 +494,21 @@ class SystemLoadWebSocketManager {
         return enrichedPool;
       }));
 
+      // Enrich with SMART data (smartWarning + temperatureStatus)
+      const smartService = require('../services/smart.service');
+      for (const pool of poolsWithData) {
+        for (const device of pool.data_devices || []) {
+          const serial = device.diskInfo?.diskSerial;
+          device.smartWarning = serial ? smartService.hasDiskWarning(serial) : false;
+          device.temperatureStatus = serial ? smartService.getDiskTemperatureStatus(serial) : null;
+        }
+        for (const device of pool.parity_devices || []) {
+          const serial = device.diskInfo?.diskSerial;
+          device.smartWarning = serial ? smartService.hasDiskWarning(serial) : false;
+          device.temperatureStatus = serial ? smartService.getDiskTemperatureStatus(serial) : null;
+        }
+      }
+
       socket.emit('load-update', {
         pools: poolsWithData,
         timestamp: Date.now()
@@ -740,18 +755,22 @@ class SystemLoadWebSocketManager {
           const result = { ...pool };
 
           // Add performance per disk in data_devices (include all disk fields + cached temperature)
+          const smartService = require('../services/smart.service');
           if (pool.data_devices) {
             result.data_devices = pool.data_devices.map(disk => {
-              if (!disk.device) return { ...disk, performance: null, powerStatus: disk.powerStatus || 'unknown', temperature: null };
+              if (!disk.device) return { ...disk, performance: null, powerStatus: disk.powerStatus || 'unknown', temperature: null, smartWarning: false, temperatureStatus: null };
               const tempData = this.disksService.temperatureCache?.get(
                 this.disksService._getBaseDisk(disk.device).replace('/dev/', '')
               );
               const isStandby = tempData?.data?.status === 'standby';
+              const serial = disk.diskInfo?.diskSerial;
               return {
                 ...disk,
                 performance: this.disksService.getDiskThroughput(disk.device, user),
                 powerStatus: isStandby ? 'standby' : (disk.powerStatus || 'active'),
-                temperature: isStandby ? null : (tempData?.data?.temperature ?? null)
+                temperature: isStandby ? null : (tempData?.data?.temperature ?? null),
+                smartWarning: serial ? smartService.hasDiskWarning(serial) : false,
+                temperatureStatus: serial ? smartService.getDiskTemperatureStatus(serial) : null
               };
             });
           }
@@ -759,16 +778,19 @@ class SystemLoadWebSocketManager {
           // Add performance per disk in parity_devices (include all disk fields + cached temperature)
           if (pool.parity_devices) {
             result.parity_devices = pool.parity_devices.map(disk => {
-              if (!disk.device) return { ...disk, performance: null, powerStatus: disk.powerStatus || 'unknown', temperature: null };
+              if (!disk.device) return { ...disk, performance: null, powerStatus: disk.powerStatus || 'unknown', temperature: null, smartWarning: false, temperatureStatus: null };
               const tempData = this.disksService.temperatureCache?.get(
                 this.disksService._getBaseDisk(disk.device).replace('/dev/', '')
               );
               const isStandby = tempData?.data?.status === 'standby';
+              const serial = disk.diskInfo?.diskSerial;
               return {
                 ...disk,
                 performance: this.disksService.getDiskThroughput(disk.device, user),
                 powerStatus: isStandby ? 'standby' : (disk.powerStatus || 'active'),
-                temperature: isStandby ? null : (tempData?.data?.temperature ?? null)
+                temperature: isStandby ? null : (tempData?.data?.temperature ?? null),
+                smartWarning: serial ? smartService.hasDiskWarning(serial) : false,
+                temperatureStatus: serial ? smartService.getDiskTemperatureStatus(serial) : null
               };
             });
           }
