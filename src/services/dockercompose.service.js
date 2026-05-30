@@ -371,49 +371,28 @@ class DockerComposeService {
   }
 
   /**
-   * Get running status for all compose projects in one call
-   * @returns {Promise<Object>} Map of stackName → { running: boolean, status: string }
+   * Get set of running container names from Docker
+   * @returns {Promise<Set<string>>} Set of running container names
    */
-  async _getComposeProjectStatuses() {
+  async _getRunningContainers() {
     try {
-      const { stdout } = await execPromise('docker-compose ls --all --format json');
-      const projects = JSON.parse(stdout || '[]');
-      const statusMap = {};
-
-      for (const project of projects) {
-        // Project name is compose_${stackName} from working directory
-        const projectName = project.Name || '';
-        if (projectName.startsWith('compose_')) {
-          const stackName = projectName.substring('compose_'.length);
-          const status = project.Status || '';
-          // Status format: "running(2)", "exited(2)", "created(1)", etc.
-          const isRunning = status.toLowerCase().startsWith('running');
-          statusMap[stackName] = {
-            running: isRunning,
-            status: status
-          };
-        }
-      }
-
-      return statusMap;
+      const { stdout } = await execPromise('docker ps --format "{{.Names}}" --filter "status=running"');
+      const runningNames = stdout.trim().split('\n').filter(name => name.length > 0);
+      return new Set(runningNames);
     } catch (error) {
-      console.warn(`Failed to get compose project statuses: ${error.message}`);
-      return {};
+      return new Set();
     }
   }
 
   /**
-   * Check if a specific stack is running
-   * @param {string} stackName - Stack name
-   * @returns {Promise<boolean>} Whether the stack is running
+   * Check if a stack is running based on its containers
+   * @param {Array<string>} containers - Container names for the stack
+   * @param {Set<string>} runningContainers - Set of currently running container names
+   * @returns {boolean} true if all containers are running, false otherwise
    */
-  async _isStackRunning(stackName) {
-    try {
-      const statuses = await this._getComposeProjectStatuses();
-      return statuses[stackName]?.running || false;
-    } catch (error) {
-      return false;
-    }
+  _isStackRunning(containers, runningContainers) {
+    if (!containers || containers.length === 0) return false;
+    return containers.every(name => runningContainers.has(name));
   }
 
   /**
@@ -1013,8 +992,8 @@ class DockerComposeService {
       const entries = await fs.readdir(basePath, { withFileTypes: true });
       const stacks = [];
 
-      // Get actual running status for all compose projects in one call
-      const projectStatuses = await this._getComposeProjectStatuses();
+      // Get running containers ONCE for all stacks (same approach as groups)
+      const runningContainers = await this._getRunningContainers();
 
       for (const entry of entries) {
         if (entry.isDirectory()) {
@@ -1051,9 +1030,8 @@ class DockerComposeService {
             const webui = stackEntry ? (stackEntry.webui || null) : null;
             const noAutoupdate = stackEntry ? (stackEntry.no_autoupdate === true) : false;
 
-            // Get actual running status from docker-compose ls
-            const stackStatus = projectStatuses[entry.name];
-            const running = stackStatus?.running || false;
+            // Running = all containers in the stack are running
+            const running = this._isStackRunning(containers, runningContainers);
 
             stacks.push({
               name: entry.name,
@@ -1131,10 +1109,9 @@ class DockerComposeService {
       const webui = stackEntry ? (stackEntry.webui || null) : null;
       const noAutoupdate = stackEntry ? (stackEntry.no_autoupdate === true) : false;
 
-      // Get actual running status from docker-compose ls
-      const projectStatuses = await this._getComposeProjectStatuses();
-      const stackStatus = projectStatuses[name];
-      const running = stackStatus?.running || false;
+      // Running = all containers in the stack are running
+      const runningContainers = await this._getRunningContainers();
+      const running = this._isStackRunning(containers, runningContainers);
 
       return {
         name: name,
