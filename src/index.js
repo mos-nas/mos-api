@@ -11,6 +11,9 @@ const net = require('net');
 const WebSocket = require('ws');
 const fs = require('fs');
 
+// Define socket path
+const SOCKET_PATH = '/run/mos-api.sock';
+
 // Enable timestamp logging and format as YYYY-MM-DD HH:MM:SS (local time)
 require('log-timestamp')(function() {
   const now = new Date();
@@ -278,7 +281,6 @@ async function startServer() {
 
   const PORT = process.env.PORT || 998;
   const TCP_ENABLED = String(process.env.LISTEN_TCP).toLowerCase() === 'true';
-  const SOCKET_PATH = process.env.SOCKET_PATH || '/run/mos-api.sock';
 
   // Track all active HTTP servers
   const servers = [];
@@ -644,11 +646,10 @@ startServer().catch(error => {
 
 // Remove the Unix socket file on shutdown so the next start can bind cleanly
 function cleanupSocketFile() {
-  const socketPath = process.env.SOCKET_PATH || '/run/mos-api.sock';
   try {
-    if (fs.existsSync(socketPath)) fs.unlinkSync(socketPath);
+    if (fs.existsSync(SOCKET_PATH)) fs.unlinkSync(SOCKET_PATH);
   } catch (err) {
-    console.warn(`Could not remove socket file ${socketPath} on shutdown: ${err.message}`);
+    console.warn(`Could not remove socket file ${SOCKET_PATH} on shutdown: ${err.message}`);
   }
 }
 
