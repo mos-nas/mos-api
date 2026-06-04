@@ -2999,4 +2999,285 @@ router.post('/:id/parity', checkRole(['admin']), async (req, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /pools/{id}/btrfs/scrub:
+ *   post:
+ *     summary: Execute BTRFS scrub operation
+ *     description: |
+ *       Scrub operations for BTRFS pools only.
+ *
+ *       **Operations:**
+ *       - `start`: Start a new scrub (fails if one is already running)
+ *       - `status`: Get current scrub status and progress
+ *       - `pause`: Pause a running scrub (via cancel in BTRFS)
+ *       - `cancel`: Cancel a running scrub
+ *     tags: [Pools]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: id
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Pool ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - operation
+ *             properties:
+ *               operation:
+ *                 type: string
+ *                 description: Operation to execute
+ *                 enum: [start, status, pause, cancel]
+ *                 example: "start"
+ *     responses:
+ *       200:
+ *         description: BTRFS scrub operation executed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "BTRFS scrub started"
+ *                 operation:
+ *                   type: string
+ *                   example: "start"
+ *                 poolName:
+ *                   type: string
+ *                   example: "data"
+ *                 running:
+ *                   type: boolean
+ *                   description: Present only for status operation
+ *                   example: true
+ *                 progress:
+ *                   type: object
+ *                   description: Present only for status operation when running
+ *                   properties:
+ *                     status:
+ *                       type: string
+ *                       example: "running"
+ *                     percent:
+ *                       type: number
+ *                       example: 45.5
+ *                     processed:
+ *                       type: string
+ *                       example: "1.5 TB"
+ *                     speed:
+ *                       type: string
+ *                       example: "150 MB/s"
+ *                     errors:
+ *                       type: integer
+ *                       example: 0
+ *                 timestamp:
+ *                   type: string
+ *                   example: "2025-06-04T12:34:56.789Z"
+ *       400:
+ *         description: Invalid request parameters or operation requirements not met
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   examples:
+ *                     wrong_type:
+ *                       value: "Scrub is only supported for BTRFS pools, not 'mergerfs'"
+ *                     not_mounted:
+ *                       value: "BTRFS pool is not mounted. Please mount the pool first."
+ *                     already_running:
+ *                       value: "A scrub operation is already running. Use cancel to stop it first."
+ *                     not_running:
+ *                       value: "No scrub operation is currently running"
+ *                     invalid_operation:
+ *                       value: "Invalid operation. Supported operations: start, status, pause, cancel"
+ *       404:
+ *         description: Pool not found
+ *       500:
+ *         description: Internal server error
+ */
+router.post('/:id/btrfs/scrub', checkRole(['admin']), async (req, res) => {
+  try {
+    const { operation } = req.body;
+
+    if (!operation) {
+      return res.status(400).json({ error: 'Operation is required' });
+    }
+
+    const pools = await poolsService.listPools({}, req.user);
+    const pool = pools.find(p => p.id === req.params.id);
+
+    if (!pool) {
+      return res.status(404).json({ error: `Pool with ID "${req.params.id}" not found` });
+    }
+
+    const result = await poolsService.executeBtrfsScrubOperation(req.params.id, operation, { user: req.user });
+    res.json(result);
+  } catch (error) {
+    console.error(error);
+    if (error.message.includes('not found')) {
+      return res.status(404).json({ error: error.message });
+    }
+    if (error.message.includes('only supported for') ||
+        error.message.includes('not mounted') ||
+        error.message.includes('already running') ||
+        error.message.includes('No') ||
+        error.message.includes('Invalid operation')) {
+      return res.status(400).json({ error: error.message });
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @swagger
+ * /pools/{id}/btrfs/balance:
+ *   post:
+ *     summary: Execute BTRFS balance operation
+ *     description: |
+ *       Balance operations for BTRFS pools only.
+ *
+ *       **Operations:**
+ *       - `start`: Start a new balance (optionally with RAID conversion)
+ *       - `status`: Get current balance status and progress
+ *       - `pause`: Pause a running balance
+ *       - `cancel`: Cancel a running or paused balance
+ *     tags: [Pools]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: id
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Pool ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - operation
+ *             properties:
+ *               operation:
+ *                 type: string
+ *                 description: Operation to execute
+ *                 enum: [start, status, pause, cancel]
+ *                 example: "start"
+ *               raidLevel:
+ *                 type: string
+ *                 description: RAID level for balance conversion (optional)
+ *                 enum: [raid0, raid1, raid10]
+ *                 example: "raid1"
+ *     responses:
+ *       200:
+ *         description: BTRFS balance operation executed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "BTRFS balance started"
+ *                 operation:
+ *                   type: string
+ *                   example: "start"
+ *                 poolName:
+ *                   type: string
+ *                   example: "data"
+ *                 running:
+ *                   type: boolean
+ *                   description: Present only for status operation
+ *                   example: true
+ *                 progress:
+ *                   type: object
+ *                   description: Present only for status operation when running
+ *                   properties:
+ *                     status:
+ *                       type: string
+ *                       example: "running"
+ *                     percent:
+ *                       type: number
+ *                       example: 45.5
+ *                 timestamp:
+ *                   type: string
+ *                   example: "2025-06-04T12:34:56.789Z"
+ *       400:
+ *         description: Invalid request parameters or operation requirements not met
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   examples:
+ *                     wrong_type:
+ *                       value: "Balance is only supported for BTRFS pools, not 'mergerfs'"
+ *                     not_mounted:
+ *                       value: "BTRFS pool is not mounted. Please mount the pool first."
+ *                     already_running:
+ *                       value: "A balance operation is already running. Use cancel to stop it first."
+ *                     not_running:
+ *                       value: "No balance operation is currently running"
+ *                     invalid_operation:
+ *                       value: "Invalid operation. Supported operations: start, status, pause, cancel"
+ *       404:
+ *         description: Pool not found
+ *       500:
+ *         description: Internal server error
+ */
+router.post('/:id/btrfs/balance', checkRole(['admin']), async (req, res) => {
+  try {
+    const { operation, raidLevel } = req.body;
+
+    if (!operation) {
+      return res.status(400).json({ error: 'Operation is required' });
+    }
+
+    const pools = await poolsService.listPools({}, req.user);
+    const pool = pools.find(p => p.id === req.params.id);
+
+    if (!pool) {
+      return res.status(404).json({ error: `Pool with ID "${req.params.id}" not found` });
+    }
+
+    const result = await poolsService.executeBtrfsBalanceOperation(req.params.id, operation, {
+      user: req.user,
+      raidLevel
+    });
+    res.json(result);
+  } catch (error) {
+    console.error(error);
+    if (error.message.includes('not found')) {
+      return res.status(404).json({ error: error.message });
+    }
+    if (error.message.includes('only supported for') ||
+        error.message.includes('not mounted') ||
+        error.message.includes('already running') ||
+        error.message.includes('No') ||
+        error.message.includes('Invalid operation')) {
+      return res.status(400).json({ error: error.message });
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
 module.exports = router;

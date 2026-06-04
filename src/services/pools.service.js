@@ -49,6 +49,22 @@ class PoolsService {
       intervalId: null
     };
 
+    // BTRFS scrub operation monitor state
+    this._btrfsScrubMonitor = {
+      active: false,
+      poolName: null,
+      mountPoint: null,
+      intervalId: null
+    };
+
+    // BTRFS balance operation monitor state
+    this._btrfsBalanceMonitor = {
+      active: false,
+      poolName: null,
+      mountPoint: null,
+      intervalId: null
+    };
+
     // Udev disk offline monitor (singleton: only one monitor across all instances)
     if (!PoolsService._udevMonitorStarted) {
       PoolsService._udevMonitor = null;
@@ -56,6 +72,7 @@ class PoolsService {
       PoolsService._udevDeviceMap = new Map(); // uuid/id -> { device, poolName }
       PoolsService._udevRestartCount = 0;
       PoolsService._udevMaxRestarts = 5;
+      PoolsService._btrfsMonitorsInitialized = false;
 
       // Kill orphans from previous runs (sync: must complete before spawn)
       try { require('child_process').execSync('pkill -f "udevadm monitor --kernel --subsystem-match=block --property" 2>/dev/null || true'); } catch {}
@@ -74,6 +91,13 @@ class PoolsService {
 
     // Initialize NonRAID monitor on startup (check if operation is already running)
     this._initNonRaidMonitor();
+
+    // Initialize BTRFS monitors on startup (singleton pattern)
+    if (!PoolsService._btrfsMonitorsInitialized) {
+      this._initBtrfsScrubMonitor();
+      this._initBtrfsBalanceMonitor();
+      PoolsService._btrfsMonitorsInitialized = true;
+    }
   }
 
   /**
@@ -1509,6 +1533,652 @@ class PoolsService {
   }
 
   /**
+   * Initialize BTRFS scrub monitor on API startup
+   * @private
+   */
+  async _initBtrfsScrubMonitor() {
+    try {
+      const pools = await this.listPools({});
+      const btrfsPools = pools.filter(p => p.type === 'btrfs');
+
+      for (const pool of btrfsPools) {
+        const mountPoint = `/mnt/${pool.name}`;
+        try {
+          await fs.access(mountPoint);
+          const isRunning = await this._isBtrfsScrubRunning(mountPoint);
+          if (isRunning) {
+             console.log(`BTRFS scrub detected on startup for pool ${pool.name}`);
+             this._startBtrfsScrubMonitor(pool.name, mountPoint, false);
+           }
+        } catch (error) {
+          // Pool not mounted, skip
+        }
+      }
+    } catch (error) {
+      console.warn(`BTRFS scrub monitor init failed: ${error.message}`);
+    }
+  }
+
+   /**
+    * Initialize BTRFS balance monitor on API startup
+    * @private
+    */
+   async _initBtrfsBalanceMonitor() {
+     try {
+       const pools = await this.listPools({});
+       const btrfsPools = pools.filter(p => p.type === 'btrfs');
+
+       for (const pool of btrfsPools) {
+         const mountPoint = `/mnt/${pool.name}`;
+         try {
+           await fs.access(mountPoint);
+           const isRunning = await this._isBtrfsBalanceRunning(mountPoint);
+           if (isRunning) {
+              console.log(`BTRFS balance detected on startup for pool ${pool.name}`);
+              this._startBtrfsBalanceMonitor(pool.name, mountPoint, false);
+            }
+         } catch (error) {
+           // Pool not mounted, skip
+         }
+       }
+     } catch (error) {
+       console.warn(`BTRFS balance monitor init failed: ${error.message}`);
+     }
+   }
+
+   /**
+    * Check if BTRFS scrub is currently running
+    * @param {string} mountPoint - BTRFS mount point
+    * @returns {Promise<boolean>}
+    * @private
+    */
+    async _isBtrfsScrubRunning(mountPoint) {
+      try {
+        const { stdout } = await execPromise(`btrfs scrub status ${mountPoint} 2>/dev/null || echo ""`);
+        return /Status:\s+running/.test(stdout);
+      } catch (error) {
+        return false;
+      }
+    }
+
+   /**
+    * Check if BTRFS balance is currently running
+    * @param {string} mountPoint - BTRFS mount point
+    * @returns {Promise<boolean>}
+    * @private
+    */
+   async _isBtrfsBalanceRunning(mountPoint) {
+     try {
+       const { stdout } = await execPromise(`btrfs balance status ${mountPoint} 2>/dev/null || echo ""`);
+       return /Balance on .* is running/.test(stdout);
+     } catch (error) {
+       return false;
+     }
+   }
+
+   /**
+    * Get BTRFS scrub progress information
+    * @param {string} mountPoint - BTRFS mount point
+    * @param {Object} user - User object with byte_format preference
+    * @returns {Promise<Object|null>}
+    * @private
+    */
+   async _getBtrfsScrubProgress(mountPoint, user = null) {
+     try {
+       const { stdout } = await execPromise(`btrfs scrub status ${mountPoint} 2>/dev/null || echo ""`);
+
+       if (!/Status:\s+running/.test(stdout)) {
+         return null;
+       }
+
+       const percentRegex = /Bytes scrubbed:\s+[\d.]+\s*\w+\s+\((\d+\.?\d*)%\)/;
+       const bytesRegex = /Bytes scrubbed:\s+([\d.]+)\s*(\w+)/;
+       const rateRegex = /Rate:\s+([\d.]+)\s*(\w+)\/s/;
+       const errorRegex = /Error summary:\s*(\d+)\s+errors?/;
+
+       const percentMatch = stdout.match(percentRegex);
+       const bytesMatch = stdout.match(bytesRegex);
+       const rateMatch = stdout.match(rateRegex);
+       const errorMatch = stdout.match(errorRegex);
+
+       const percent = percentMatch ? parseFloat(percentMatch[1]) : 0;
+
+       let processed = null;
+       if (bytesMatch) {
+         const bytesValue = parseFloat(bytesMatch[1]);
+         const bytesUnit = bytesMatch[2];
+         const unitMultipliers = { 'B': 1, 'KiB': 1024, 'MiB': 1024 * 1024, 'GiB': 1024 * 1024 * 1024, 'TiB': 1024 * 1024 * 1024 * 1024 };
+         const bytesTotal = bytesValue * (unitMultipliers[bytesUnit] || 1);
+         processed = this.formatBytes(bytesTotal, user);
+       }
+
+       let speed = null;
+       if (rateMatch) {
+         const rateValue = parseFloat(rateMatch[1]);
+         const rateUnit = rateMatch[2];
+         const unitMultipliers = { 'KiB': 1024, 'MiB': 1024 * 1024, 'GiB': 1024 * 1024 * 1024 };
+         const bytesPerSecond = rateValue * (unitMultipliers[rateUnit] || 1);
+         speed = this.formatSpeed(bytesPerSecond, user);
+       }
+
+       const errors = errorMatch ? parseInt(errorMatch[1]) : 0;
+
+       return {
+         status: 'running',
+         percent,
+         processed,
+         speed,
+         errors
+       };
+     } catch (error) {
+       return null;
+     }
+   }
+
+  /**
+   * Get BTRFS balance progress information
+   * @param {string} mountPoint - BTRFS mount point
+   * @param {Object} user - User object with byte_format preference
+   * @returns {Promise<Object|null>}
+   * @private
+   */
+  async _getBtrfsBalanceProgress(mountPoint, user = null) {
+    try {
+      const { stdout } = await execPromise(`btrfs balance status ${mountPoint} 2>/dev/null || echo ""`);
+
+      if (!/Balance on .* is running/.test(stdout)) {
+        return null;
+      }
+
+      // Parse: "28 out of about 2009 chunks balanced (29 considered),  99% left"
+      const progressRegex = /(\d+)\s+out of about\s+(\d+)\s+chunks balanced/;
+      const match = stdout.match(progressRegex);
+
+      if (!match) {
+        return { status: 'running', percent: 0 };
+      }
+
+      const [, done, total] = match;
+      const percent = total > 0 ? ((parseFloat(done) / parseFloat(total)) * 100).toFixed(1) : 0;
+
+      return {
+        status: 'running',
+        percent: parseFloat(percent)
+      };
+    } catch (error) {
+      return null;
+    }
+  }
+
+  /**
+   * Start BTRFS scrub operation monitor
+   * @param {string} poolName - Pool name
+   * @param {string} mountPoint - BTRFS mount point
+   * @param {boolean} sendStartNotification - Whether to send start notification
+   * @private
+   */
+  _startBtrfsScrubMonitor(poolName, mountPoint, sendStartNotification = true) {
+    this._stopBtrfsScrubMonitor();
+
+    this._btrfsScrubMonitor.active = true;
+    this._btrfsScrubMonitor.poolName = poolName;
+    this._btrfsScrubMonitor.mountPoint = mountPoint;
+
+    if (sendStartNotification) {
+      sendNotification('BTRFS', `BTRFS scrub started for pool ${poolName}`, 'normal').catch(err => console.warn(`Failed to send BTRFS scrub start notification: ${err.message}`));
+    }
+
+    this._btrfsScrubMonitor.intervalId = setInterval(() => {
+      this._checkBtrfsScrubCompletion();
+    }, 10000); // Check every 10 seconds for faster detection
+
+    console.log(`BTRFS scrub monitor started for pool ${poolName}`);
+  }
+
+  /**
+   * Stop BTRFS scrub operation monitor
+   * @private
+   */
+  _stopBtrfsScrubMonitor() {
+    if (this._btrfsScrubMonitor.intervalId) {
+      clearInterval(this._btrfsScrubMonitor.intervalId);
+      this._btrfsScrubMonitor.intervalId = null;
+    }
+    this._btrfsScrubMonitor.active = false;
+    this._btrfsScrubMonitor.poolName = null;
+    this._btrfsScrubMonitor.mountPoint = null;
+  }
+
+  /**
+   * Check if BTRFS scrub has completed
+   * @private
+   */
+  async _checkBtrfsScrubCompletion() {
+    try {
+      const isRunning = await this._isBtrfsScrubRunning(this._btrfsScrubMonitor.mountPoint);
+
+      if (!isRunning) {
+        const { stdout } = await execPromise(`btrfs scrub status ${this._btrfsScrubMonitor.mountPoint} 2>/dev/null || echo ""`);
+
+        // Parse error summary: "Error summary:    no errors found" or "Error summary:    X errors found"
+        const errorSummaryMatch = stdout.match(/Error summary:\s*(\d+)\s+errors found/);
+        const errors = errorSummaryMatch ? parseInt(errorSummaryMatch[1]) : 0;
+
+        if (errors > 0) {
+          sendNotification('BTRFS', `BTRFS scrub completed for pool ${this._btrfsScrubMonitor.poolName} with ${errors} error(s)`, 'alert').catch(err => console.warn(`Failed to send BTRFS scrub completion notification: ${err.message}`));
+        } else {
+          sendNotification('BTRFS', `BTRFS scrub completed successfully for pool ${this._btrfsScrubMonitor.poolName} - no errors found`, 'normal').catch(err => console.warn(`Failed to send BTRFS scrub completion notification: ${err.message}`));
+        }
+
+        console.log(`BTRFS scrub completed for pool ${this._btrfsScrubMonitor.poolName}${errors > 0 ? ` with ${errors} errors` : ' - no errors'}`);
+        this._stopBtrfsScrubMonitor();
+      }
+    } catch (error) {
+      console.warn(`BTRFS scrub completion check failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Start BTRFS balance operation monitor
+   * @param {string} poolName - Pool name
+   * @param {string} mountPoint - BTRFS mount point
+   * @param {boolean} sendStartNotification - Whether to send start notification
+   * @private
+   */
+  _startBtrfsBalanceMonitor(poolName, mountPoint, sendStartNotification = true) {
+    this._stopBtrfsBalanceMonitor();
+
+    this._btrfsBalanceMonitor.active = true;
+    this._btrfsBalanceMonitor.poolName = poolName;
+    this._btrfsBalanceMonitor.mountPoint = mountPoint;
+
+    if (sendStartNotification) {
+      sendNotification('BTRFS', `BTRFS balance started for pool ${poolName}`, 'normal').catch(err => console.warn(`Failed to send BTRFS balance start notification: ${err.message}`));
+    }
+
+    this._btrfsBalanceMonitor.intervalId = setInterval(() => {
+      this._checkBtrfsBalanceCompletion();
+    }, 10000); // Check every 10 seconds for faster detection
+
+    console.log(`BTRFS balance monitor started for pool ${poolName}`);
+  }
+
+ /**
+   * Stop BTRFS balance operation monitor
+   * @private
+   */
+  _stopBtrfsBalanceMonitor() {
+    if (this._btrfsBalanceMonitor.intervalId) {
+      clearInterval(this._btrfsBalanceMonitor.intervalId);
+      this._btrfsBalanceMonitor.intervalId = null;
+    }
+    this._btrfsBalanceMonitor.active = false;
+    this._btrfsBalanceMonitor.poolName = null;
+    this._btrfsBalanceMonitor.mountPoint = null;
+  }
+
+  /**
+   * Check if BTRFS balance has completed
+   * @private
+   */
+  async _checkBtrfsBalanceCompletion() {
+    try {
+      const isRunning = await this._isBtrfsBalanceRunning(this._btrfsBalanceMonitor.mountPoint);
+
+      if (!isRunning) {
+        const { stdout } = await execPromise(`btrfs balance status ${this._btrfsBalanceMonitor.mountPoint} 2>/dev/null || echo ""`);
+
+        // Balance doesn't have error summary like scrub, just check completion
+        sendNotification('BTRFS', `BTRFS balance completed successfully for pool ${this._btrfsBalanceMonitor.poolName}`, 'normal').catch(err => console.warn(`Failed to send BTRFS balance completion notification: ${err.message}`));
+
+        console.log(`BTRFS balance completed for pool ${this._btrfsBalanceMonitor.poolName}`);
+        this._stopBtrfsBalanceMonitor();
+      }
+    } catch (error) {
+      console.warn(`BTRFS balance completion check failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Execute BTRFS scrub operation
+   * @param {string} poolId - Pool ID
+   * @param {string} operation - Operation: start, status, pause, cancel, auto
+   * @param {Object} options - Additional options
+   * @returns {Promise<Object>}
+   */
+  async executeBtrfsScrubOperation(poolId, operation, options = {}) {
+    const pool = await this.getPoolById(poolId);
+
+    if (pool.type !== 'btrfs') {
+      throw new Error(`Scrub is only supported for BTRFS pools, not '${pool.type}'`);
+    }
+
+    const mountPoint = `/mnt/${pool.name}`;
+    try {
+      await fs.access(mountPoint);
+    } catch (error) {
+      throw new Error('BTRFS pool is not mounted. Please mount the pool first.');
+    }
+
+    // Validate operation
+    const validOperations = ['start', 'status', 'pause', 'cancel'];
+    if (!validOperations.includes(operation)) {
+      throw new Error(`Invalid operation. Supported operations: ${validOperations.join(', ')}`);
+    }
+
+    // Handle status operation
+    if (operation === 'status') {
+      const isRunning = await this._isBtrfsScrubRunning(mountPoint);
+      const progress = isRunning ? await this._getBtrfsScrubProgress(mountPoint, options.user) : null;
+
+      return {
+        success: true,
+        operation: 'status',
+        poolName: pool.name,
+        running: isRunning,
+        progress,
+        timestamp: new Date().toISOString()
+      };
+    }
+
+    // Check if operation is already running
+    const isRunning = await this._isBtrfsScrubRunning(mountPoint);
+
+    switch (operation) {
+      case 'start':
+        if (isRunning) {
+          throw new Error('A scrub operation is already running. Use "cancel" to stop it first.');
+        }
+        break;
+      case 'pause':
+      case 'cancel':
+        if (!isRunning) {
+          throw new Error('No scrub operation is currently running');
+        }
+        break;
+    }
+
+    // Build command
+    let command;
+    let description;
+
+    switch (operation) {
+      case 'start':
+        command = `btrfs scrub start ${mountPoint}`;
+        description = 'BTRFS scrub started';
+        break;
+      case 'pause':
+        command = `btrfs scrub cancel ${mountPoint}`;
+        description = 'BTRFS scrub paused';
+        break;
+      case 'cancel':
+        command = `btrfs scrub cancel ${mountPoint}`;
+        description = 'BTRFS scrub cancelled';
+        break;
+    }
+
+    try {
+      console.log(`Executing BTRFS scrub operation: ${command}`);
+
+      // For start operation, run detached (async) like SnapRAID
+      if (operation === 'start') {
+        const { spawn } = require('child_process');
+        const child = spawn('bash', ['-c', command], {
+          detached: true,
+          stdio: 'ignore'
+        });
+        child.unref();
+
+        this._startBtrfsScrubMonitor(pool.name, mountPoint, true);
+      } else {
+        // For pause/cancel, wait for completion
+        await execPromise(command);
+
+        if (operation === 'pause') {
+          sendNotification('BTRFS', `BTRFS scrub paused for pool ${pool.name}`, 'normal')
+            .catch(err => console.warn(`Failed to send BTRFS scrub pause notification: ${err.message}`));
+        } else if (operation === 'cancel') {
+          sendNotification('BTRFS', `BTRFS scrub cancelled for pool ${pool.name}`, 'normal')
+            .catch(err => console.warn(`Failed to send BTRFS scrub cancel notification: ${err.message}`));
+          this._stopBtrfsScrubMonitor();
+        }
+      }
+
+      return {
+        success: true,
+        message: description,
+        operation,
+        poolName: pool.name,
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      throw new Error(`BTRFS scrub operation failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Execute BTRFS balance operation
+   * @param {string} poolId - Pool ID
+   * @param {string} operation - Operation: start, status, pause, cancel, auto
+   * @param {Object} options - Additional options
+   * @returns {Promise<Object>}
+   */
+  async executeBtrfsBalanceOperation(poolId, operation, options = {}) {
+    const pool = await this.getPoolById(poolId);
+
+    if (pool.type !== 'btrfs') {
+      throw new Error(`Balance is only supported for BTRFS pools, not '${pool.type}'`);
+    }
+
+    const mountPoint = `/mnt/${pool.name}`;
+    try {
+      await fs.access(mountPoint);
+    } catch (error) {
+      throw new Error('BTRFS pool is not mounted. Please mount the pool first.');
+    }
+
+     // Validate operation
+     const validOperations = ['start', 'status', 'pause', 'cancel'];
+     if (!validOperations.includes(operation)) {
+       throw new Error(`Invalid operation. Supported operations: ${validOperations.join(', ')}`);
+     }
+
+     // Handle status operation
+     if (operation === 'status') {
+       const isRunning = await this._isBtrfsBalanceRunning(mountPoint);
+       const progress = isRunning ? await this._getBtrfsBalanceProgress(mountPoint, options.user) : null;
+
+       return {
+         success: true,
+         operation: 'status',
+         poolName: pool.name,
+         running: isRunning,
+         progress,
+         timestamp: new Date().toISOString()
+       };
+     }
+
+     // Check if operation is already running
+     const isRunning = await this._isBtrfsBalanceRunning(mountPoint);
+
+     switch (operation) {
+       case 'start':
+         if (isRunning) {
+           throw new Error('A balance operation is already running. Use "cancel" to stop it first.');
+         }
+         break;
+       case 'pause':
+       case 'cancel':
+         if (!isRunning) {
+           throw new Error('No balance operation is currently running');
+         }
+         break;
+     }
+
+     // Build command
+     let command;
+     let description;
+
+     switch (operation) {
+       case 'start':
+         if (options.raidLevel) {
+           command = `btrfs balance start -dconvert=${options.raidLevel} -mconvert=${options.raidLevel} ${mountPoint}`;
+           description = `BTRFS balance started with RAID ${options.raidLevel} conversion`;
+         } else {
+           command = `btrfs balance start ${mountPoint}`;
+           description = 'BTRFS balance started';
+         }
+         break;
+       case 'pause':
+         command = `btrfs balance pause ${mountPoint}`;
+         description = 'BTRFS balance paused';
+         break;
+       case 'cancel':
+         command = `btrfs balance cancel ${mountPoint}`;
+         description = 'BTRFS balance cancelled';
+         break;
+     }
+
+     try {
+       console.log(`Executing BTRFS balance operation: ${command}`);
+
+       // For start operation, run detached (async) like SnapRAID
+       if (operation === 'start') {
+         const { spawn } = require('child_process');
+         const child = spawn('bash', ['-c', command], {
+           detached: true,
+           stdio: 'ignore'
+         });
+         child.unref();
+
+         this._startBtrfsBalanceMonitor(pool.name, mountPoint, true);
+       } else {
+         // For pause/cancel, wait for completion
+         await execPromise(command);
+
+         if (operation === 'pause') {
+           sendNotification('BTRFS', `BTRFS balance paused for pool ${pool.name}`, 'normal')
+             .catch(err => console.warn(`Failed to send BTRFS balance pause notification: ${err.message}`));
+         } else if (operation === 'cancel') {
+           sendNotification('BTRFS', `BTRFS balance cancelled for pool ${pool.name}`, 'normal')
+             .catch(err => console.warn(`Failed to send BTRFS balance cancel notification: ${err.message}`));
+           this._stopBtrfsBalanceMonitor();
+         }
+       }
+
+       return {
+         success: true,
+         message: description,
+         operation,
+         poolName: pool.name,
+         timestamp: new Date().toISOString()
+       };
+     } catch (error) {
+       throw new Error(`BTRFS balance operation failed: ${error.message}`);
+     }
+   }
+
+   /**
+    * Inject BTRFS scrub/balance operation status into pool object
+    * @param {Object} pool - Pool object to inject status into
+    * @param {Object} user - User object with byte_format preference
+    * @returns {Promise<void>}
+    */
+   async _injectBtrfsOperationStatus(pool, user = null) {
+     try {
+       if (!pool.status) {
+         pool.status = {};
+       }
+
+       const mountPoint = `/mnt/${pool.name}`;
+       let scrubRunning = false;
+       let balanceRunning = false;
+       let scrubProgress = null;
+       let balanceProgress = null;
+
+       try {
+         await fs.access(mountPoint);
+         scrubRunning = await this._isBtrfsScrubRunning(mountPoint);
+         balanceRunning = await this._isBtrfsBalanceRunning(mountPoint);
+
+         if (scrubRunning) {
+           scrubProgress = await this._getBtrfsScrubProgress(mountPoint, user);
+         }
+         if (balanceRunning) {
+           balanceProgress = await this._getBtrfsBalanceProgress(mountPoint, user);
+         }
+       } catch (error) {
+         // Pool not mounted
+       }
+
+        pool.status.scrub_operation = scrubRunning;
+        pool.status.scrub_progress = scrubProgress;
+        pool.status.balance_operation = balanceRunning;
+        pool.status.balance_progress = balanceProgress;
+     } catch (error) {
+       if (!pool.status) {
+         pool.status = {};
+       }
+       pool.status.scrub_operation = false;
+       pool.status.scrub_progress = null;
+       pool.status.balance_operation = false;
+       pool.status.balance_progress = null;
+     }
+   }
+
+   /**
+    * Ensure that BTRFS scrub configuration exists in pool config
+    * @param {Object} pool - Pool object
+    * @returns {boolean} - Whether the pool was modified
+    * @private
+    */
+   _ensureBtrfsScrubConfig(pool) {
+     if (pool.type !== 'btrfs') {
+       return false;
+     }
+
+     if (!pool.config) {
+       pool.config = {};
+     }
+
+     if (!pool.config.scrub) {
+       pool.config.scrub = {
+         enabled: false,
+         schedule: "0 4 * * WED"
+       };
+       return true;
+     }
+
+     return false;
+   }
+
+   /**
+    * Ensure that BTRFS balance configuration exists in pool config
+    * @param {Object} pool - Pool object
+    * @returns {boolean} - Whether the pool was modified
+    * @private
+    */
+   _ensureBtrfsBalanceConfig(pool) {
+     if (pool.type !== 'btrfs') {
+       return false;
+     }
+
+     if (!pool.config) {
+       pool.config = {};
+     }
+
+     if (!pool.config.balance) {
+       pool.config.balance = {
+         enabled: false,
+         schedule: "0 5 * * SUN"
+       };
+       return true;
+     }
+
+     return false;
+   }
+
+   /**
    * Map mount points to SnapRAID disk identifiers (dN) by parsing the config file
    * @param {string} poolName - Pool name to find config file
    * @param {string[]} mountPoints - Array of mount points to map
@@ -1739,6 +2409,12 @@ class PoolsService {
       // Handle NonRAID pools
       if (pool.type === 'nonraid') {
         await this._injectNonRaidParityStatus(pool, user);
+        return;
+      }
+
+      // Handle BTRFS pools (scrub and balance)
+      if (pool.type === 'btrfs') {
+        await this._injectBtrfsOperationStatus(pool, user);
         return;
       }
 
@@ -5069,6 +5745,13 @@ class PoolsService {
         if (this._ensureScrubConfig(pool)) {
           poolsModified = true;
         }
+        // Ensure BTRFS scrub/balance config for BTRFS pools
+        if (this._ensureBtrfsScrubConfig(pool)) {
+          poolsModified = true;
+        }
+        if (this._ensureBtrfsBalanceConfig(pool)) {
+          poolsModified = true;
+        }
       }
 
       // Save pools if any were modified
@@ -5153,6 +5836,13 @@ class PoolsService {
 
       // Ensure scrub config exists for MergerFS pools with parity
       if (this._ensureScrubConfig(pool)) {
+        await this._writePools(pools);
+      }
+      // Ensure BTRFS scrub/balance config for BTRFS pools
+      if (this._ensureBtrfsScrubConfig(pool)) {
+        await this._writePools(pools);
+      }
+      if (this._ensureBtrfsBalanceConfig(pool)) {
         await this._writePools(pools);
       }
 
