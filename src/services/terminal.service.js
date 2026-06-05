@@ -43,7 +43,15 @@ class TerminalService {
         rows: 24,
         shell: '/bin/bash',
         cwd: '/',
-        env: { ...process.env, TERM: 'xterm-256color', LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8' }
+        env: {
+          ...process.env,
+          TERM: 'xterm-256color',
+          LANG: 'C.UTF-8',
+          LC_ALL: 'C.UTF-8',
+          HISTFILE: '/root/.bash_history',
+          HISTSIZE: '10000',
+          HISTFILESIZE: '20000'
+        }
       };
 
       const config = { ...defaultOptions, ...options };
@@ -274,4 +282,4 @@ class TerminalService {
 
 }
 
-module.exports = new TerminalService(); 
+module.exports = new TerminalService();
