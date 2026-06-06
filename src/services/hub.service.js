@@ -356,8 +356,8 @@ class HubService {
         }
       }
 
-      // Clone with depth 1, no interactive prompts
-      const cmd = `GIT_TERMINAL_PROMPT=0 git clone --depth 1 "${cloneUrl}" "${fullPath}" 2>&1`;
+      // Clone with full history, no interactive prompts
+      const cmd = `GIT_TERMINAL_PROMPT=0 git clone "${cloneUrl}" "${fullPath}" 2>&1`;
       await execPromise(cmd, { timeout: 120000 });
 
       return { success: true, folder: folderPath };
