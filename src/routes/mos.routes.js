@@ -3202,6 +3202,13 @@ router.get('/certificates', async (req, res) => {
  *                       type: boolean
  *                       description: NetBird VPN service status
  *                       example: false
+ *                 mos:
+ *                   type: object
+ *                   properties:
+ *                     supporter:
+ *                       type: boolean
+ *                       description: Whether a valid supporter key is configured
+ *                       example: false
  *               additionalProperties:
  *                 type: object
  *                 properties:
@@ -3235,6 +3242,8 @@ router.get('/certificates', async (req, res) => {
  *                 enabled: false
  *               netbird:
  *                 enabled: false
+ *               mos:
+ *                 supporter: false
  *       401:
  *         description: Not authenticated
  *         content:

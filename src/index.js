@@ -572,6 +572,13 @@ async function startServer() {
     } catch (error) {
       console.error(`Error initializing Pools: ${error.message}`);
     }
+
+    try {
+      const mosService = require('./services/mos.service');
+      await mosService.initSupporterStatus();
+    } catch (error) {
+      console.error(`Error initializing supporter status: ${error.message}`);
+    }
   }
 
   // Create HTTP server, attach Socket.io and VNC upgrade handling

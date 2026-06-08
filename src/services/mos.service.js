@@ -9,6 +9,7 @@ const PoolsService = require('./pools.service');
 const hubService = require('./hub.service');
 const systemService = require('./system.service');
 const swapService = require('./swap.service');
+const { SUPPORTER_PUBLIC_KEY } = require('../config/supporter');
 
 class MosService {
   constructor() {
@@ -31,6 +32,68 @@ class MosService {
     this._systemJsonBackup = null;
     this._networkRollbackTimeout = 60000; // 60 seconds
     this._networkPendingTimestamp = null;
+
+    // Supporter badge - validated key result, cached in memory
+    this._supporterCache = false;
+    this._supporterPubKeyObj = null;
+  }
+
+  /**
+   * Builds (and caches) the Ed25519 public KeyObject from the embedded raw key.
+   * Wraps the raw 32-byte key in a SPKI DER structure so Node's crypto can use it.
+   * @returns {crypto.KeyObject} The public key object
+   * @private
+   */
+  _getSupporterPublicKey() {
+    if (this._supporterPubKeyObj) return this._supporterPubKeyObj;
+    const raw = Buffer.from(SUPPORTER_PUBLIC_KEY, 'base64url');
+    const der = Buffer.concat([Buffer.from('302a300506032b6570032100', 'hex'), raw]);
+    this._supporterPubKeyObj = crypto.createPublicKey({ key: der, format: 'der', type: 'spki' });
+    return this._supporterPubKeyObj;
+  }
+
+  /**
+   * Validates a supporter key against the embedded public key.
+   * Key format: base64url(nonce[16] || signature[64]).
+   * @param {string} key - The supporter key to validate
+   * @returns {boolean} True if the key is valid
+   */
+  validateSupporterKey(key) {
+    try {
+      if (!key || typeof key !== 'string') return false;
+      const payload = Buffer.from(key.trim(), 'base64url');
+      if (payload.length !== 80) return false; // 16-byte nonce + 64-byte signature
+      const nonce = payload.subarray(0, 16);
+      const signature = payload.subarray(16);
+      return crypto.verify(null, nonce, this._getSupporterPublicKey(), signature);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Reads the supporter key from system.json, validates it and caches the result.
+   * Called once at API startup.
+   * @returns {Promise<boolean>} The cached supporter status
+   */
+  async initSupporterStatus() {
+    try {
+      const settings = await this.getSystemSettings();
+      this._supporterCache = this.validateSupporterKey(settings.supporter_key);
+      console.info(`Supporter status: ${this._supporterCache ? 'active' : 'inactive'}`);
+    } catch (error) {
+      this._supporterCache = false;
+      console.warn(`Could not determine supporter status: ${error.message}`);
+    }
+    return this._supporterCache;
+  }
+
+  /**
+   * Returns the cached supporter status.
+   * @returns {boolean} True if a valid supporter key is configured
+   */
+  isSupporter() {
+    return this._supporterCache === true;
   }
 
   /**
@@ -3678,7 +3741,8 @@ class MosService {
       update_check: {
         enabled: false,
         update_check_schedule: '15 9 * * *'
-      }
+      },
+      supporter_key: ''
     };
   }
 
@@ -3737,7 +3801,8 @@ class MosService {
         if (error.code !== 'ENOENT') throw error;
       }
       // Only allowed fields are updated
-      const allowed = ['hostname', 'global_spindown', 'keymap', 'timezone', 'display', 'persist_history', 'persist_notifications', 'ntp', 'notification_sound', 'cpufreq', 'swapfile', 'binfmt', 'webui', 'update_check'];
+      const allowed = ['hostname', 'global_spindown', 'keymap', 'timezone', 'display', 'persist_history', 'persist_notifications', 'ntp', 'notification_sound', 'cpufreq', 'swapfile', 'binfmt', 'webui', 'update_check', 'supporter_key'];
+      let supporterKeyChanged = false;
       let ntpChanged = false;
       let swapfileUpdate = null;
       let keymapChanged = false;
@@ -4004,6 +4069,15 @@ class MosService {
             if (updates.update_check.update_check_schedule !== undefined)
               current.update_check.update_check_schedule = updates.update_check.update_check_schedule;
           }
+        } else if (key === 'supporter_key') {
+          const value = typeof updates[key] === 'string' ? updates[key].trim() : '';
+          if (value !== current.supporter_key) {
+            if (!this.validateSupporterKey(value)) {
+              throw new Error('Invalid supporter key');
+            }
+            current[key] = value;
+            supporterKeyChanged = true;
+          }
         } else if (key === 'global_spindown') {
           const newValue = parseInt(updates.global_spindown, 10);
           if (!isNaN(newValue) && newValue !== current.global_spindown) {
@@ -4023,6 +4097,11 @@ class MosService {
 
       // Write file
       await fs.writeFile('/boot/config/system.json', JSON.stringify(current, null, 2), 'utf8');
+
+      // Re-validate supporter key immediately so the cached status stays in sync
+      if (supporterKeyChanged) {
+        this._supporterCache = this.validateSupporterKey(current.supporter_key);
+      }
 
       // NTP service stop/start/restart if changed
       if (ntpChanged) {
@@ -4704,6 +4783,7 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
         lxc: { enabled: lxcEnabled },
         vm: { enabled: vmEnabled, running: vmRunning },
         hub: { enabled: hubEnabled },
+        mos: { supporter: this.isSupporter() },
         ...networkServices
       };
 

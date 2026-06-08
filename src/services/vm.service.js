@@ -2738,10 +2738,17 @@ class VmService {
         downloadUrl
       ], {
         detached: true,
-        stdio: 'ignore'
+        stdio: 'ignore',
+        env: { ...process.env, HOME: '/root' }
       });
 
       downloadProcess.unref();
+
+      await this._sendNotification(
+        'VMs',
+        `Started download of VirtIO ISO ${version}. You will be notified when the download is finished.`,
+        'normal'
+      );
 
       // Monitor download completion in background
       downloadProcess.on('close', async (code) => {

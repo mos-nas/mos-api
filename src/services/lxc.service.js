@@ -1343,7 +1343,9 @@ lxc.mount.auto = cgroup:mixed:force
    */
   async downloadData(url) {
     try {
-      const { stdout } = await execPromise(`wget -qO- "${url}"`);
+      const { stdout } = await execPromise(`wget -qO- "${url}"`, {
+        env: { ...process.env, HOME: '/root' }
+      });
       return stdout;
     } catch (error) {
       throw new Error(`Failed to download data from ${url}: ${error.message}`);
