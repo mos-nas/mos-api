@@ -252,7 +252,7 @@ class SmartService {
     for (const [serial, diskConf] of Object.entries(this.config.disks)) {
       result.disks[serial] = {
         ...diskConf,
-        acknowledged: diskConf.acknowledged || {},
+        acknowledged: this._buildAcknowledgedMap(diskConf),
         warning: this._hasDiskWarning(serial, diskConf)
       };
     }
@@ -284,7 +284,7 @@ class SmartService {
     if (!diskConf) return null;
     return {
       ...diskConf,
-      acknowledged: diskConf.acknowledged || {},
+      acknowledged: this._buildAcknowledgedMap(diskConf),
       warning: this._hasDiskWarning(serial, diskConf)
     };
   }
@@ -1613,8 +1613,9 @@ class SmartService {
    */
   _buildAcknowledgedMap(diskConf) {
     const result = {};
-    if (!diskConf) return result;
-    const ack = diskConf.acknowledged || {};
+    const ack = (diskConf && diskConf.acknowledged && typeof diskConf.acknowledged === 'object')
+      ? diskConf.acknowledged
+      : {};
     const monitored = this._getEffectiveMonitoredAttributes(diskConf);
     for (const id of monitored) {
       const v = ack[id];
