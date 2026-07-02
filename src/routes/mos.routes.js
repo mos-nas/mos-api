@@ -3195,14 +3195,21 @@ router.get('/certificates', async (req, res) => {
  *                       type: boolean
  *                       description: Tailscale VPN service status
  *                       example: false
- *                 netbird:
- *                   type: object
- *                   properties:
- *                     enabled:
- *                       type: boolean
- *                       description: NetBird VPN service status
- *                       example: false
- *                 mos:
+  *                 netbird:
+  *                   type: object
+  *                   properties:
+  *                     enabled:
+  *                       type: boolean
+  *                       description: NetBird VPN service status
+  *                       example: false
+  *                 llm:
+  *                   type: object
+  *                   properties:
+  *                     enabled:
+  *                       type: boolean
+  *                       description: LLM container is connected (heartbeat active)
+  *                       example: true
+  *                 mos:
  *                   type: object
  *                   properties:
  *                     supporter:
@@ -3240,9 +3247,11 @@ router.get('/certificates', async (req, res) => {
  *                 enabled: false
  *               tailscale:
  *                 enabled: false
- *               netbird:
- *                 enabled: false
- *               mos:
+  *               netbird:
+  *                 enabled: false
+  *               llm:
+  *                 enabled: true
+  *               mos:
  *                 supporter: false
  *       401:
  *         description: Not authenticated

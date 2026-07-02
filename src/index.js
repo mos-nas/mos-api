@@ -62,6 +62,7 @@ const hubRoutes = require('./routes/hub.routes');
 const pluginsRoutes = require('./routes/plugins.routes');
 const smartRoutes = require('./routes/smart.routes');
 const diagnosticsRoutes = require('./routes/diagnostics.routes');
+const llmRoutes = require('./routes/llm.routes');
 const poolsWebSocketRoutes = require('./routes/websocket/pools.websocket.routes');
 const systemWebSocketRoutes = require('./routes/websocket/system.websocket.routes');
 const terminalWebSocketRoutes = require('./routes/websocket/terminal.websocket.routes');
@@ -168,6 +169,7 @@ async function startServer() {
   app.use('/api/v1/mos', authenticateToken, mosRoutes);
   app.use('/api/v1/mos/diag', authenticateToken, diagnosticsRoutes);
   app.use('/api/v1/mos/hub', authenticateToken, hubRoutes);
+  app.use('/api/v1/llm', authenticateToken, llmRoutes);
   app.use('/api/v1/mos/plugins', authenticateToken, pluginsRoutes);
   app.use('/api/v1/shares', authenticateToken, sharesRoutes);
   app.use('/api/v1/remotes', authenticateToken, remotesRoutes);

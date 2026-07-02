@@ -10,6 +10,7 @@ const hubService = require('./hub.service');
 const systemService = require('./system.service');
 const swapService = require('./swap.service');
 const { SUPPORTER_PUBLIC_KEY } = require('../config/supporter');
+const llmModule = require('../routes/llm.routes');
 
 class MosService {
   constructor() {
@@ -4767,14 +4768,15 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
   async getAllServiceStatus() {
     try {
       // Execute all status reads in parallel for maximum performance
-      const [dockerEnabled, lxcEnabled, vmEnabled, hubEnabled, networkServices, dockerRunning, vmRunning] = await Promise.all([
+      const [dockerEnabled, lxcEnabled, vmEnabled, hubEnabled, networkServices, dockerRunning, vmRunning, llmStatus] = await Promise.all([
         this._getDockerEnabledStatus(),
         this._getLxcEnabledStatus(),
         this._getVmEnabledStatus(),
         hubService.getHubEnabledStatus(),
         this._getNetworkServicesStatus(),
         this._isDockerRunning(),
-        this._isLibvirtRunning()
+        this._isLibvirtRunning(),
+        this._getLlmStatus()
       ]);
 
       const result = {
@@ -4782,6 +4784,7 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
         lxc: { enabled: lxcEnabled },
         vm: { enabled: vmEnabled, running: vmRunning },
         hub: { enabled: hubEnabled },
+        llm: llmStatus,
         mos: { supporter: this.isSupporter() },
         ...networkServices
       };
@@ -4807,6 +4810,20 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
       return result;
     } catch (error) {
       throw new Error(`Fehler beim Abrufen des Service-Status: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get LLM service status
+   * @returns {Promise<Object>} LLM status object
+   * @private
+   */
+  async _getLlmStatus() {
+    try {
+      const status = llmModule.getLlmStatus();
+      return { enabled: status.active };
+    } catch (error) {
+      return { enabled: false };
     }
   }
 

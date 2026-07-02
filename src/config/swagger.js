@@ -124,6 +124,10 @@ const options = {
       {
         name: 'Notifications',
         description: 'Notifications Management'
+      },
+      {
+        name: 'LLM',
+        description: 'LLM Integration and Chat'
       }
     ],
     servers: [
