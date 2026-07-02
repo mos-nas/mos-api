@@ -1009,8 +1009,13 @@ class DockerComposeService {
               continue; // Skip if no compose.yaml
             }
 
-            // Get services from boot path
-            const services = await this._getComposeServices(stackPath);
+            // Get services from boot path (tolerate broken YAML: return empty list)
+            let services = [];
+            try {
+              services = await this._getComposeServices(stackPath);
+            } catch (err) {
+              // Invalid compose.yaml - still list the stack so it can be fixed
+            }
 
             // Get containers from working directory
             const containers = await this._getStackContainers(entry.name);
@@ -1096,8 +1101,14 @@ class DockerComposeService {
         // No mos.override.yaml
       }
 
-      // Get services from boot path
-      const services = await this._getComposeServices(stackPath);
+      // Get services from boot path (tolerate broken YAML: return empty list so
+      // the raw yaml is still returned and can be fixed by the user)
+      let services = [];
+      try {
+        services = await this._getComposeServices(stackPath);
+      } catch (err) {
+        // Invalid compose.yaml - keep returning the raw content below
+      }
 
       // Get containers from working directory
       const containers = await this._getStackContainers(name);
