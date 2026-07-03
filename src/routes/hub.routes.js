@@ -224,7 +224,7 @@ router.post('/repositories', async (req, res) => {
  *                 type: string
  *             example:
  *               - https://github.com/s3ppo/docker_json_templates
- *               - https://github.com/ich777/mos-templates
+ *               - https://github.com/mos-nas/mos-templates
  *       500:
  *         description: Server error
  */

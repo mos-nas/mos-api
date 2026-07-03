@@ -193,7 +193,7 @@ router.post('/query', async (req, res) => {
  *               repository:
  *                 type: string
  *                 description: GitHub repository URL
- *                 example: "https://github.com/ich777/mos-intel-gpu-top"
+ *                 example: "https://github.com/mos-nas/mos-intel-gpu-top"
  *               refresh:
  *                 type: boolean
  *                 description: Force refresh cache

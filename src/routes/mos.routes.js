@@ -3671,7 +3671,7 @@ router.post('/rollbackos', async (req, res) => {
  *                         example: "0.0.1-alpha.2"
  *                       html_url:
  *                         type: string
- *                         example: "https://github.com/ich777/mos-releases/releases/tag/0.0.1-alpha.2"
+ *                         example: "https://github.com/mos-nas/mos-releases/releases/tag/0.0.1-alpha.2"
  *                 beta:
  *                   type: array
  *                   description: Beta releases
@@ -3683,7 +3683,7 @@ router.post('/rollbackos', async (req, res) => {
  *                         example: "0.0.1-beta.1"
  *                       html_url:
  *                         type: string
- *                         example: "https://github.com/ich777/mos-releases/releases/tag/0.0.1-beta.1"
+ *                         example: "https://github.com/mos-nas/mos-releases/releases/tag/0.0.1-beta.1"
  *                 stable:
  *                   type: array
  *                   description: Stable releases
@@ -3695,13 +3695,13 @@ router.post('/rollbackos', async (req, res) => {
  *                         example: "1.0.0"
  *                       html_url:
  *                         type: string
- *                         example: "https://github.com/ich777/mos-releases/releases/tag/1.0.0"
+ *                         example: "https://github.com/mos-nas/mos-releases/releases/tag/1.0.0"
  *               example:
  *                 alpha:
  *                   - tag_name: "0.0.1-alpha.2"
- *                     html_url: "https://github.com/ich777/mos-releases/releases/tag/0.0.1-alpha.2"
+ *                     html_url: "https://github.com/mos-nas/mos-releases/releases/tag/0.0.1-alpha.2"
  *                   - tag_name: "0.0.1-alpha.1"
- *                     html_url: "https://github.com/ich777/mos-releases/releases/tag/0.0.1-alpha.1"
+ *                     html_url: "https://github.com/mos-nas/mos-releases/releases/tag/0.0.1-alpha.1"
  *                 beta: []
  *                 stable: []
  *       401:
@@ -3887,14 +3887,14 @@ router.get('/osinfo', async (req, res) => {
  *                   html_url:
  *                     type: string
  *                     description: URL to the kernel release
- *                     example: "https://github.com/ich777/kernel-releases/releases/tag/6.17.1-mos"
+ *                     example: "https://github.com/mos-nas/kernel-releases/releases/tag/6.17.1-mos"
  *               example:
  *                 - tag_name: "6.17.1-mos"
- *                   html_url: "https://github.com/ich777/kernel-releases/releases/tag/6.17.1-mos"
+ *                   html_url: "https://github.com/mos-nas/kernel-releases/releases/tag/6.17.1-mos"
  *                 - tag_name: "6.17.0-mos"
- *                   html_url: "https://github.com/ich777/kernel-releases/releases/tag/6.17.0-mos"
+ *                   html_url: "https://github.com/mos-nas/kernel-releases/releases/tag/6.17.0-mos"
  *                 - tag_name: "6.1.0"
- *                   html_url: "https://github.com/ich777/kernel-releases/releases/tag/6.1.0"
+ *                   html_url: "https://github.com/mos-nas/kernel-releases/releases/tag/6.1.0"
  *       401:
  *         description: Not authenticated
  *         content:

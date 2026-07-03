@@ -2,14 +2,14 @@
 
 This API came to life not because the world needed it, but because a few wanted it.
 
-## [Learn more about MOS](https://github.com/ich777/mos-releases)
+## [Learn more about MOS](https://github.com/mos-nas/mos-releases)
 
 ---
 
 ### Documentation
 Comprehensive documentation is still a TODO for this repository.
 
-For a more general overview please refer to [MOS Releases](https://github.com/ich777/mos-releases/blob/master/README.md) repostiory.
+For a more general overview please refer to [MOS Releases](https://github.com/mos-nas/mos-releases/blob/master/README.md) repostiory.
 
 ---
 
