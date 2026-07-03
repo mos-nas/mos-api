@@ -1,6 +1,9 @@
 const express = require('express');
 const router = express.Router();
 
+// LLM counts as offline after this long without a heartbeat.
+const HEARTBEAT_TIMEOUT_MS = 30000;
+
 const containerState = {
   active: false,
   model: null,
@@ -8,6 +11,20 @@ const containerState = {
   pendingMessages: [],
   pendingResponses: []
 };
+
+function isHeartbeatStale() {
+  if (!containerState.lastHeartbeat) return true;
+  const age = Date.now() - new Date(containerState.lastHeartbeat).getTime();
+  return age > HEARTBEAT_TIMEOUT_MS;
+}
+
+// Lazily recomputed on access, so no background timer is needed.
+function refreshActiveState() {
+  if (containerState.active && isHeartbeatStale()) {
+    containerState.active = false;
+  }
+  return containerState.active;
+}
 
 /**
  * @swagger
@@ -22,7 +39,7 @@ const containerState = {
  *       properties:
  *         active:
  *           type: boolean
- *           description: Whether LLM container is connected
+ *           description: Whether the LLM is available
  *           example: true
  *         model:
  *           type: string
@@ -82,6 +99,7 @@ const containerState = {
  *         description: Unauthorized
  */
 router.get('/status', (req, res) => {
+  refreshActiveState();
   res.json({
     active: containerState.active,
     model: containerState.model,
@@ -112,14 +130,14 @@ router.get('/status', (req, res) => {
  *             schema:
  *               $ref: '#/components/schemas/LLMChatResponse'
  *       503:
- *         description: LLM container not available
+ *         description: LLM not available
  *       401:
  *         description: Unauthorized
  */
 router.post('/chat', async (req, res) => {
-  if (!containerState.active) {
+  if (!refreshActiveState()) {
     return res.status(503).json({
-      error: 'LLM container is not connected'
+      error: 'LLM not available'
     });
   }
 
@@ -239,6 +257,7 @@ function waitForResponse(requestId, timeoutMs) {
 }
 
 function getLlmStatus() {
+  refreshActiveState();
   return {
     active: containerState.active,
     model: containerState.model,
