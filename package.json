@@ -19,7 +19,7 @@
     "express": "^4.22.1",
     "express-fileupload": "^1.5.1",
     "express-rate-limit": "7.1.5",
-    "joi": "17.11.0",
+    "joi": "^17.13.4",
     "jsonwebtoken": "9.0.2",
     "log-timestamp": "0.3.0",
     "node-pty": "1.0.0",
@@ -30,7 +30,7 @@
     "swagger-ui-express": "5.0.1",
     "systeminformation": "^5.31.5",
     "web-push": "3.6.7",
-    "ws": "8.18.0"
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "jest": "^30.2.0",
