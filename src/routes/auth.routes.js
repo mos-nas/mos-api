@@ -137,8 +137,8 @@ const { loginRateLimiter, resetLoginAttempts } = require('../middleware/login-ra
  *           example: "Token for automated deployments"
  *         token:
  *           type: string
- *           description: Sanitized token (only shown on creation)
- *           example: "abcd1234...wxyz9876"
+ *           description: The API token value
+ *           example: "a1b2c3d4e5f6..."
  *         createdAt:
  *           type: string
  *           format: date-time
@@ -150,6 +150,53 @@ const { loginRateLimiter, resetLoginAttempts } = require('../middleware/login-ra
  *         isActive:
  *           type: boolean
  *           description: Token active status
+ *         permissions:
+ *           $ref: '#/components/schemas/TokenPermissions'
+ *     TokenPermissions:
+ *       type: object
+ *       nullable: true
+ *       description: >
+ *         Token permission scope. null or mode 'full' = unrestricted (admin).
+ *         'readonly' = only read (GET/HEAD) requests are allowed, except for sensitive
+ *         resources (auth, users) which are always blocked for readonly tokens.
+ *         'custom' = per-resource levels (none/read/write); unlisted resources default
+ *         to 'none'. Sensitive resources can be granted explicitly in custom mode.
+ *       properties:
+ *         mode:
+ *           type: string
+ *           enum: [full, readonly, custom]
+ *           example: readonly
+ *         resources:
+ *           type: object
+ *           description: >
+ *             Only used when mode is 'custom'. Maps a resource name (the first path
+ *             segment after /api/v1/) to an access level. Resources not listed default
+ *             to 'none'. Sub-paths inherit the parent resource, e.g. /docker/mos/compose
+ *             counts as 'docker', /mos/diag as 'mos', /disks/smart as 'disks'.
+ *           propertyNames:
+ *             enum:
+ *               - system
+ *               - disks
+ *               - pools
+ *               - docker
+ *               - lxc
+ *               - vm
+ *               - mos
+ *               - llm
+ *               - shares
+ *               - remotes
+ *               - iscsi
+ *               - users
+ *               - cron
+ *               - terminal
+ *               - notifications
+ *               - auth
+ *           additionalProperties:
+ *             type: string
+ *             enum: [none, read, write]
+ *           example:
+ *             docker: write
+ *             vm: read
  *     CreateAdminTokenRequest:
  *       type: object
  *       required:
@@ -163,6 +210,8 @@ const { loginRateLimiter, resetLoginAttempts } = require('../middleware/login-ra
  *           type: string
  *           description: Optional description
  *           example: "Token for third-party API integration"
+ *         permissions:
+ *           $ref: '#/components/schemas/TokenPermissions'
  */
 
 /**
@@ -978,6 +1027,30 @@ router.get('/admin-tokens', authenticateToken, checkRole(['admin']), async (req,
  *         application/json:
  *           schema:
  *             $ref: '#/components/schemas/CreateAdminTokenRequest'
+ *           examples:
+ *             fullAccess:
+ *               summary: Full access (admin) - omit permissions or use mode 'full'
+ *               value:
+ *                 name: "CI/CD Pipeline"
+ *                 description: "Full access token for deployments"
+ *             readonly:
+ *               summary: Read-only - all GET endpoints except auth/users
+ *               value:
+ *                 name: "Monitoring"
+ *                 description: "Dashboard read-only access"
+ *                 permissions:
+ *                   mode: "readonly"
+ *             customDocker:
+ *               summary: Custom - write on docker, read on vm/system
+ *               value:
+ *                 name: "Docker Bot"
+ *                 description: "Manages containers, can view VMs and system"
+ *                 permissions:
+ *                   mode: "custom"
+ *                   resources:
+ *                     docker: "write"
+ *                     vm: "read"
+ *                     system: "read"
  *     responses:
  *       201:
  *         description: Admin token created successfully
@@ -1005,7 +1078,7 @@ router.get('/admin-tokens', authenticateToken, checkRole(['admin']), async (req,
  */
 router.post('/admin-tokens', authenticateToken, checkRole(['admin']), async (req, res) => {
   try {
-    const { name, description } = req.body;
+    const { name, description, permissions } = req.body;
 
     if (!name || typeof name !== 'string' || name.trim().length === 0) {
       return res.status(400).json({
@@ -1014,8 +1087,159 @@ router.post('/admin-tokens', authenticateToken, checkRole(['admin']), async (req
       });
     }
 
-    const result = await userService.createAdminToken(name.trim(), description || '');
+    // permissions is optional (null/omitted = full access / admin)
+    const result = await userService.createAdminToken(name.trim(), description || '', permissions || null);
     res.status(201).json(result);
+  } catch (error) {
+    res.status(400).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * @swagger
+ * /auth/admin-tokens/me:
+ *   get:
+ *     summary: Get current token permissions
+ *     description: Introspect the permissions of the token used for this request. Only reachable when authenticated with an API token (boot token or admin token).
+ *     tags: [Authentication]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Current token permissions
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 id:
+ *                   type: string
+ *                   nullable: true
+ *                 name:
+ *                   type: string
+ *                   nullable: true
+ *                 role:
+ *                   type: string
+ *                   example: admin
+ *                 isBootToken:
+ *                   type: boolean
+ *                 permissions:
+ *                   $ref: '#/components/schemas/TokenPermissions'
+ *       401:
+ *         description: Not authenticated
+ *       403:
+ *         description: Only available for API tokens
+ */
+router.get('/admin-tokens/me', authenticateToken, async (req, res) => {
+  // This endpoint is only meaningful for API tokens, not for JWT users
+  if (!req.user.isAdminToken && !req.user.isBootToken) {
+    return res.status(403).json({
+      error: 'This endpoint is only available for API tokens.'
+    });
+  }
+
+  // Boot tokens always have full (unrestricted) access
+  const permissions = req.user.isBootToken ? { mode: 'full' } : (req.user.permissions || { mode: 'full' });
+
+  res.json({
+    id: req.user.id || null,
+    name: req.user.name || (req.user.isBootToken ? 'boot-token' : null),
+    role: 'admin',
+    isBootToken: !!req.user.isBootToken,
+    permissions
+  });
+});
+
+/**
+ * @swagger
+ * /auth/admin-tokens/{id}/permissions:
+ *   put:
+ *     summary: Update admin token permissions
+ *     description: Update the permission scope of an existing admin API token (admin only)
+ *     tags: [Authentication]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Token ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               permissions:
+ *                 $ref: '#/components/schemas/TokenPermissions'
+ *           examples:
+ *             promoteToFull:
+ *               summary: Grant full access
+ *               value:
+ *                 permissions:
+ *                   mode: "full"
+ *             makeReadonly:
+ *               summary: Restrict to read-only
+ *               value:
+ *                 permissions:
+ *                   mode: "readonly"
+ *             customScopes:
+ *               summary: Custom per-resource scopes
+ *               value:
+ *                 permissions:
+ *                   mode: "custom"
+ *                   resources:
+ *                     docker: "write"
+ *                     vm: "read"
+ *     responses:
+ *       200:
+ *         description: Admin token permissions updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Admin token permissions updated successfully"
+ *                 data:
+ *                   $ref: '#/components/schemas/AdminToken'
+ *       400:
+ *         description: Bad request - validation failed or token not found
+ *       401:
+ *         description: Not authenticated
+ *       403:
+ *         description: Admin permission required
+ *       500:
+ *         description: Server error
+ */
+router.put('/admin-tokens/:id/permissions', authenticateToken, checkRole(['admin']), async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        error: 'Token ID is required'
+      });
+    }
+
+    // permissions may be null (full access) or a permissions object
+    const permissions = Object.prototype.hasOwnProperty.call(req.body, 'permissions')
+      ? req.body.permissions
+      : null;
+
+    const result = await userService.updateAdminTokenPermissions(id, permissions);
+    res.json(result);
   } catch (error) {
     res.status(400).json({
       success: false,

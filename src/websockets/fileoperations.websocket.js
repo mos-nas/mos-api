@@ -383,7 +383,7 @@ class FileOperationsWebSocketManager {
     }
 
     const jwt = require('jsonwebtoken');
-    const { getBootToken } = require('../middleware/auth.middleware');
+    const { getBootToken, isActionAllowed } = require('../middleware/auth.middleware');
     const userService = require('../services/user.service');
 
     // Check cache first
@@ -431,6 +431,10 @@ class FileOperationsWebSocketManager {
       // Check if it's an admin API token
       const adminTokenData = await userService.validateAdminToken(token);
       if (adminTokenData) {
+        // Restricted tokens need 'read' permission for 'mos' (file operations)
+        if (!isActionAllowed(adminTokenData.permissions, 'mos', 'read')) {
+          return { success: false, message: "Access denied. This token does not have 'read' permission for 'mos'." };
+        }
         const result = {
           success: true,
           user: adminTokenData

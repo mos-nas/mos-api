@@ -490,7 +490,7 @@ class TerminalWebSocketManager {
 
     try {
       const jwt = require('jsonwebtoken');
-      const { getBootToken } = require('../middleware/auth.middleware');
+      const { getBootToken, isActionAllowed } = require('../middleware/auth.middleware');
       const userService = require('../services/user.service');
 
       // Check if it's the boot token
@@ -510,6 +510,10 @@ class TerminalWebSocketManager {
       // Check if it's an admin API token
       const adminTokenData = await userService.validateAdminToken(token);
       if (adminTokenData) {
+        // Restricted tokens need 'write' permission for 'terminal' (shell access)
+        if (!isActionAllowed(adminTokenData.permissions, 'terminal', 'write')) {
+          return { success: false, message: "Access denied. This token does not have 'write' permission for 'terminal'." };
+        }
         return {
           success: true,
           user: adminTokenData

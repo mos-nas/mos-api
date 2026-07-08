@@ -210,6 +210,13 @@ class DockerWebSocketManager extends EventEmitter {
           return;
         }
 
+        // Restricted tokens need 'write' permission for Docker operations
+        const { isActionAllowed } = require('../middleware/auth.middleware');
+        if (authResult.user.isAdminToken && !isActionAllowed(authResult.user.permissions, 'docker', 'write')) {
+          this.sendUpdate(socket, null, 'error', { message: "Access denied. This token does not have 'write' permission for 'docker'." });
+          return;
+        }
+
         socket.userId = authResult.user.userId;
         socket.userRole = authResult.user.role;
         socket.user = authResult.user;
@@ -321,6 +328,13 @@ class DockerWebSocketManager extends EventEmitter {
         // Check if user is admin
         if (authResult.user.role !== 'admin') {
           this.sendUpdate(socket, operationId, 'error', { message: 'Admin role required' });
+          return;
+        }
+
+        // Restricted tokens need 'write' permission to cancel operations
+        const { isActionAllowed } = require('../middleware/auth.middleware');
+        if (authResult.user.isAdminToken && !isActionAllowed(authResult.user.permissions, 'docker', 'write')) {
+          this.sendUpdate(socket, operationId, 'error', { message: "Access denied. This token does not have 'write' permission for 'docker'." });
           return;
         }
 
@@ -2095,7 +2109,7 @@ class DockerWebSocketManager extends EventEmitter {
 
     try {
       const jwt = require('jsonwebtoken');
-      const { getBootToken } = require('../middleware/auth.middleware');
+      const { getBootToken, isActionAllowed } = require('../middleware/auth.middleware');
       const userService = require('../services/user.service');
 
       // Check if it's the boot token
@@ -2115,6 +2129,11 @@ class DockerWebSocketManager extends EventEmitter {
       // Check if it's an admin API token
       const adminTokenData = await userService.validateAdminToken(token);
       if (adminTokenData) {
+        // Restricted tokens need at least 'read' permission for 'docker'
+        // (write permission is checked separately for mutating operations)
+        if (!isActionAllowed(adminTokenData.permissions, 'docker', 'read')) {
+          return { success: false, message: "Access denied. This token does not have 'read' permission for 'docker'." };
+        }
         return {
           success: true,
           user: adminTokenData

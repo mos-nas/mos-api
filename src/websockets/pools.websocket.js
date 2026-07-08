@@ -587,7 +587,7 @@ class PoolWebSocketManager {
 
     try {
       const jwt = require('jsonwebtoken');
-      const { getBootToken } = require('../middleware/auth.middleware');
+      const { getBootToken, isActionAllowed } = require('../middleware/auth.middleware');
       const userService = require('../services/user.service');
 
       // Check if it's the boot token
@@ -607,6 +607,10 @@ class PoolWebSocketManager {
       // Check if it's an admin API token
       const adminTokenData = await userService.validateAdminToken(token);
       if (adminTokenData) {
+        // Restricted tokens need 'read' permission for 'pools'
+        if (!isActionAllowed(adminTokenData.permissions, 'pools', 'read')) {
+          return { success: false, message: "Access denied. This token does not have 'read' permission for 'pools'." };
+        }
         return {
           success: true,
           user: adminTokenData

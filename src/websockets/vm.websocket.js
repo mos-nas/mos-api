@@ -130,7 +130,7 @@ class VmWebSocketManager {
 
     try {
       const jwt = require('jsonwebtoken');
-      const { getBootToken } = require('../middleware/auth.middleware');
+      const { getBootToken, isActionAllowed } = require('../middleware/auth.middleware');
       const userService = require('../services/user.service');
 
       // Check if it's the boot token
@@ -150,6 +150,10 @@ class VmWebSocketManager {
       // Check if it's an admin API token
       const adminTokenData = await userService.validateAdminToken(token);
       if (adminTokenData) {
+        // Restricted tokens need 'read' permission for 'vm'
+        if (!isActionAllowed(adminTokenData.permissions, 'vm', 'read')) {
+          return { success: false, message: "Access denied. This token does not have 'read' permission for 'vm'." };
+        }
         const user = {
           ...adminTokenData,
           userId: adminTokenData.id

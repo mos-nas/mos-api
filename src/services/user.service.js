@@ -169,7 +169,53 @@ class UserService {
 
   _sanitizeAdminToken(token) {
     const sanitized = { ...token };
+    // Always expose the complete permissions model. Tokens stored without
+    // permissions (or with null) are full-access, so report an explicit
+    // { mode: 'full' } instead of null for a consistent API contract.
+    sanitized.permissions = token.permissions || { mode: 'full' };
     return sanitized;
+  }
+
+  /**
+   * Validate and normalize a token permissions object
+   * Accepts null (full access), or { mode: 'full'|'readonly'|'custom', resources?: {...} }
+   * @param {Object|null} permissions - Permissions to validate
+   * @returns {Object|null} Normalized permissions object or null for full access
+   */
+  _validatePermissions(permissions) {
+    if (permissions === null || permissions === undefined) {
+      return null;
+    }
+
+    if (typeof permissions !== 'object' || Array.isArray(permissions)) {
+      throw new Error('permissions must be an object or null');
+    }
+
+    const validModes = ['full', 'readonly', 'custom'];
+    if (!validModes.includes(permissions.mode)) {
+      throw new Error(`permissions.mode must be one of: ${validModes.join(', ')}`);
+    }
+
+    // full and readonly do not carry per-resource data
+    if (permissions.mode !== 'custom') {
+      return { mode: permissions.mode };
+    }
+
+    const resources = permissions.resources;
+    if (!resources || typeof resources !== 'object' || Array.isArray(resources)) {
+      throw new Error('permissions.resources must be an object when mode is "custom"');
+    }
+
+    const validLevels = ['none', 'read', 'write'];
+    const normalized = {};
+    for (const [resource, level] of Object.entries(resources)) {
+      if (!validLevels.includes(level)) {
+        throw new Error(`Invalid permission level '${level}' for resource '${resource}'. Must be one of: ${validLevels.join(', ')}`);
+      }
+      normalized[resource] = level;
+    }
+
+    return { mode: 'custom', resources: normalized };
   }
 
   _sanitizeAdminTokens(tokens) {
@@ -650,15 +696,19 @@ class UserService {
    * Create a new permanent admin token
    * @param {string} name - Descriptive name for the token
    * @param {string} description - Optional description
+   * @param {Object|null} permissions - Optional permissions (null = full access / admin)
    * @returns {Promise<Object>} Created token with full token value
    */
-  async createAdminToken(name, description = '') {
+  async createAdminToken(name, description = '', permissions = null) {
     const tokens = await this.loadAdminTokens();
 
     // Check if name already exists
     if (tokens.some(t => t.name === name)) {
       throw new Error('Token name already exists');
     }
+
+    // Validate permissions (null = full access / admin)
+    const normalizedPermissions = this._validatePermissions(permissions);
 
     // Generate secure random token
     const token = crypto.randomBytes(32).toString('hex');
@@ -668,6 +718,7 @@ class UserService {
       name,
       description,
       token,
+      permissions: normalizedPermissions,
       createdAt: new Date().toISOString(),
       lastUsed: null,
       isActive: true
@@ -679,7 +730,9 @@ class UserService {
     return {
       success: true,
       message: 'Admin token created successfully',
-      data: newToken // Return full token only on creation
+      // Return full token only on creation; sanitize to expose the explicit
+      // permissions model (e.g. { mode: 'full' }) while keeping the token value.
+      data: this._sanitizeAdminToken(newToken)
     };
   }
 
@@ -713,7 +766,32 @@ class UserService {
       id: tokens[tokenIndex].id,
       name: tokens[tokenIndex].name,
       role: 'admin',
-      isAdminToken: true
+      isAdminToken: true,
+      permissions: tokens[tokenIndex].permissions || null
+    };
+  }
+
+  /**
+   * Update the permissions of an admin token
+   * @param {string} id - Token ID
+   * @param {Object|null} permissions - New permissions (null = full access)
+   * @returns {Promise<Object>} Result with sanitized token
+   */
+  async updateAdminTokenPermissions(id, permissions) {
+    const tokens = await this.loadAdminTokens();
+    const tokenIndex = tokens.findIndex(t => t.id === id);
+
+    if (tokenIndex === -1) {
+      throw new Error('Admin token not found');
+    }
+
+    tokens[tokenIndex].permissions = this._validatePermissions(permissions);
+    await this.saveAdminTokens(tokens);
+
+    return {
+      success: true,
+      message: 'Admin token permissions updated successfully',
+      data: this._sanitizeAdminToken(tokens[tokenIndex])
     };
   }
 

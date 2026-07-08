@@ -458,7 +458,7 @@ class DisksWebSocketManager {
     }
 
     const jwt = require('jsonwebtoken');
-    const { getBootToken } = require('../middleware/auth.middleware');
+    const { getBootToken, isActionAllowed } = require('../middleware/auth.middleware');
     const userService = require('../services/user.service');
 
     // Check cache first for basic auth validation
@@ -508,6 +508,10 @@ class DisksWebSocketManager {
       // Check if it's an admin API token
       const adminTokenData = await userService.validateAdminToken(token);
       if (adminTokenData) {
+        // Restricted tokens need 'read' permission for 'disks'
+        if (!isActionAllowed(adminTokenData.permissions, 'disks', 'read')) {
+          return { success: false, message: "Access denied. This token does not have 'read' permission for 'disks'." };
+        }
         const result = {
           success: true,
           user: adminTokenData
