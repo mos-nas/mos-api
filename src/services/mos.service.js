@@ -2306,7 +2306,12 @@ class MosService {
         tailscale: {
           enabled: false,
           update_check: false,
-          tailscaled_params: ''
+          tailscaled_params: '',
+          web: {
+            enabled: false,
+            address: '0.0.0.0',
+            port: 8088
+          }
         },
         netbird: {
           enabled: false,
@@ -3493,6 +3498,15 @@ class MosService {
           current.services.tailscale.update_check = services.tailscale.update_check;
         if (services.tailscale.tailscaled_params !== undefined)
           current.services.tailscale.tailscaled_params = services.tailscale.tailscaled_params;
+        if (services.tailscale.web !== undefined) {
+          if (!current.services.tailscale.web) current.services.tailscale.web = {};
+          if (services.tailscale.web.enabled !== undefined)
+            current.services.tailscale.web.enabled = services.tailscale.web.enabled;
+          if (services.tailscale.web.address !== undefined)
+            current.services.tailscale.web.address = services.tailscale.web.address;
+          if (services.tailscale.web.port !== undefined)
+            current.services.tailscale.web.port = services.tailscale.web.port;
+        }
       }
 
       // Handle netbird service

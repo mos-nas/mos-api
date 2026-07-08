@@ -1795,6 +1795,10 @@ router.delete('/settings/network/interfaces/:interfaceName/vlans/:vlanId', async
  *                 enabled: true
  *                 update_check: false
  *                 tailscaled_params: ""
+ *                 web:
+ *                   enabled: false
+ *                   address: "0.0.0.0"
+ *                   port: 8088
  *                 online: true
  *               netbird:
  *                 enabled: false
@@ -3195,6 +3199,18 @@ router.get('/certificates', async (req, res) => {
  *                       type: boolean
  *                       description: Tailscale VPN service status
  *                       example: false
+ *                     web:
+ *                       type: boolean
+ *                       description: Enable Tailscale web UI
+ *                       example: false
+ *                     address:
+ *                       type: string
+ *                       description: Listen address for the Tailscale web UI
+ *                       example: "0.0.0.0"
+ *                     port:
+ *                       type: integer
+ *                       description: Listen port for the Tailscale web UI
+ *                       example: 8088
   *                 netbird:
   *                   type: object
   *                   properties:
@@ -3247,6 +3263,10 @@ router.get('/certificates', async (req, res) => {
  *                 enabled: false
  *               tailscale:
  *                 enabled: false
+ *                 web:
+ *                   enabled: false
+ *                   address: "0.0.0.0"
+ *                   port: 8088
   *               netbird:
   *                 enabled: false
   *               llm:
