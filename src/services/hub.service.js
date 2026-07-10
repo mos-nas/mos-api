@@ -22,14 +22,14 @@ class HubService {
     this._installedDockerImagesCache = null;
     this._installedCacheTtlMs = 30000;
 
-    // Recommended repositories: cached to disk when the hub is enabled,
-    // refetched hourly on failure.
-    this.recommendedReposUrl = 'https://mos-official.net/recommended-repos.json';
-    this.recommendedReposPath = '/var/mos/hub/recommended_repositories.json';
-    this._recommendedReposFetchTimeoutMs = 10000;
-    this._recommendedReposRetryMs = 60 * 60 * 1000;
-    this._recommendedReposRetryTimer = null;
-    this._recommendedReposFetching = false;
+    // Known repositories: cached to disk when the hub is enabled, refetched
+    // hourly on failure and refreshed on every manual hub update.
+    this.knownReposUrl = 'https://mos-official.net/known-repos.json';
+    this.knownReposPath = '/var/mos/hub/known_repositories.json';
+    this._knownReposFetchTimeoutMs = 10000;
+    this._knownReposRetryMs = 60 * 60 * 1000;
+    this._knownReposRetryTimer = null;
+    this._knownReposFetching = false;
   }
 
   /**
@@ -244,9 +244,9 @@ class HubService {
         }
       }
 
-      // Refresh recommended repositories in the background when the hub is enabled
+      // Refresh known repositories in the background when the hub is enabled
       if (hubEnabledTurnedOn) {
-        this.initRecommendedRepositories().catch(() => {});
+        this.initKnownRepositories().catch(() => {});
       }
 
       const { repositories, ...result } = current;
@@ -314,15 +314,15 @@ class HubService {
   }
 
   /**
-   * Fetches the recommended repositories and caches them to disk.
+   * Fetches the known repositories and caches them to disk.
    * Returns false on failure so the caller can schedule a retry.
    * @returns {Promise<boolean>}
    */
-  async _fetchAndCacheRecommendedRepositories() {
+  async _fetchAndCacheKnownRepositories() {
     let body;
     try {
-      const response = await axios.get(this.recommendedReposUrl, {
-        timeout: this._recommendedReposFetchTimeoutMs,
+      const response = await axios.get(this.knownReposUrl, {
+        timeout: this._knownReposFetchTimeoutMs,
         // Fetch as raw text and parse ourselves so we can reject non-JSON
         // (e.g. an HTML error page served with status 200)
         responseType: 'text',
@@ -334,7 +334,7 @@ class HubService {
       });
       body = response.data;
     } catch (error) {
-      console.warn(`Hub: Could not fetch recommended repositories: ${error.message}`);
+      console.warn(`Hub: Could not fetch known repositories: ${error.message}`);
       return false;
     }
 
@@ -342,12 +342,12 @@ class HubService {
     try {
       data = JSON.parse(body);
     } catch {
-      console.warn('Hub: Recommended repositories response is not valid JSON');
+      console.warn('Hub: Known repositories response is not valid JSON');
       return false;
     }
 
     if (!Array.isArray(data)) {
-      console.warn('Hub: Recommended repositories response is not an array');
+      console.warn('Hub: Known repositories response is not an array');
       return false;
     }
 
@@ -361,51 +361,51 @@ class HubService {
     }
 
     try {
-      await fs.mkdir(path.dirname(this.recommendedReposPath), { recursive: true });
-      await fs.writeFile(this.recommendedReposPath, JSON.stringify(repos, null, 2), 'utf8');
+      await fs.mkdir(path.dirname(this.knownReposPath), { recursive: true });
+      await fs.writeFile(this.knownReposPath, JSON.stringify(repos, null, 2), 'utf8');
     } catch (error) {
-      console.warn(`Hub: Could not write recommended repositories cache: ${error.message}`);
+      console.warn(`Hub: Could not write known repositories cache: ${error.message}`);
       return false;
     }
 
     // Cancel any pending retry now that we have a valid list
-    this._clearRecommendedReposRetry();
+    this._clearKnownReposRetry();
     return true;
   }
 
   /**
-   * Clears a pending recommended repositories retry timer.
+   * Clears a pending known repositories retry timer.
    */
-  _clearRecommendedReposRetry() {
-    if (this._recommendedReposRetryTimer) {
-      clearTimeout(this._recommendedReposRetryTimer);
-      this._recommendedReposRetryTimer = null;
+  _clearKnownReposRetry() {
+    if (this._knownReposRetryTimer) {
+      clearTimeout(this._knownReposRetryTimer);
+      this._knownReposRetryTimer = null;
     }
   }
 
   /**
    * Schedules an hourly retry until a fetch succeeds. Timer is unref'd.
    */
-  _scheduleRecommendedReposRetry() {
-    if (this._recommendedReposRetryTimer) return;
+  _scheduleKnownReposRetry() {
+    if (this._knownReposRetryTimer) return;
 
-    this._recommendedReposRetryTimer = setTimeout(async () => {
-      this._recommendedReposRetryTimer = null;
-      await this.initRecommendedRepositories();
-    }, this._recommendedReposRetryMs);
+    this._knownReposRetryTimer = setTimeout(async () => {
+      this._knownReposRetryTimer = null;
+      await this.initKnownRepositories();
+    }, this._knownReposRetryMs);
 
-    if (this._recommendedReposRetryTimer.unref) {
-      this._recommendedReposRetryTimer.unref();
+    if (this._knownReposRetryTimer.unref) {
+      this._knownReposRetryTimer.unref();
     }
   }
 
   /**
-   * Fetches and caches recommended repositories when the hub is enabled.
+   * Fetches and caches known repositories when the hub is enabled.
    * On failure, schedules an hourly retry. Safe to call at startup or on enable.
    * @returns {Promise<void>}
    */
-  async initRecommendedRepositories() {
-    if (this._recommendedReposFetching) return;
+  async initKnownRepositories() {
+    if (this._knownReposFetching) return;
 
     let enabled = false;
     try {
@@ -415,37 +415,58 @@ class HubService {
       enabled = false;
     }
     if (!enabled) {
-      this._clearRecommendedReposRetry();
+      this._clearKnownReposRetry();
       return;
     }
 
-    this._recommendedReposFetching = true;
+    this._knownReposFetching = true;
     let ok = false;
     try {
-      ok = await this._fetchAndCacheRecommendedRepositories();
+      ok = await this._fetchAndCacheKnownRepositories();
     } finally {
-      this._recommendedReposFetching = false;
+      this._knownReposFetching = false;
     }
-    if (!ok) this._scheduleRecommendedReposRetry();
+    if (!ok) this._scheduleKnownReposRetry();
   }
 
   /**
-   * Returns the cached recommended repository URLs (empty array if none).
+   * Returns the cached known repository URLs (empty array if none).
    * When the cache is missing/invalid, triggers a background refresh
    * (respects hub-enabled, same timeout/validation/retry).
    * @returns {Promise<Array<string>>}
    */
-  async getRecommendedRepositories() {
+  async getKnownRepositories() {
     try {
-      const data = await fs.readFile(this.recommendedReposPath, 'utf8');
+      const data = await fs.readFile(this.knownReposPath, 'utf8');
       const parsed = JSON.parse(data);
       if (Array.isArray(parsed)) return parsed;
     } catch {
       // Cache missing or invalid -> fall through to background refresh
     }
 
-    this.initRecommendedRepositories().catch(() => {});
+    this.initKnownRepositories().catch(() => {});
     return [];
+  }
+
+  /**
+   * Merges repo URL lists, validated and de-duplicated by normalized URL
+   */
+  _mergeRepoUrls(...lists) {
+    const seen = new Set();
+    const merged = [];
+    for (const list of lists) {
+      if (!Array.isArray(list)) continue;
+      for (const url of list) {
+        if (typeof url !== 'string') continue;
+        const trimmed = url.trim();
+        if (!this._isValidGitUrl(trimmed)) continue;
+        const norm = this._normalizeRepoUrl(trimmed);
+        if (seen.has(norm)) continue;
+        seen.add(norm);
+        merged.push(trimmed);
+      }
+    }
+    return merged;
   }
 
   /**
@@ -557,8 +578,12 @@ class HubService {
     const reposPath = '/var/mos/hub/repositories';
     const tempPath = '/var/mos/hub/temp';
 
-    // Get configured repositories
-    const urls = await this.getRepositories();
+    // Refresh known repos and merge with configured or keep if failed
+    await this.initKnownRepositories();
+    const urls = this._mergeRepoUrls(
+      await this.getRepositories(),
+      await this._readJsonFile(this.knownReposPath)
+    );
 
     if (!urls || urls.length === 0) {
       throw new Error('No repositories configured');

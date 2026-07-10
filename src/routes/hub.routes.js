@@ -206,16 +206,16 @@ router.post('/repositories', async (req, res) => {
 
 /**
  * @swagger
- * /mos/hub/recommended:
+ * /mos/hub/knownrepositories:
  *   get:
- *     summary: Get recommended repository URLs
- *     description: Returns the cached list of recommended repository URLs (empty array if none).
+ *     summary: Get known repository URLs
+ *     description: Returns the cached list of known repository URLs (empty array if none).
  *     tags: [MOS Hub]
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: List of recommended repository URLs
+ *         description: List of known repository URLs
  *         content:
  *           application/json:
  *             schema:
@@ -228,10 +228,10 @@ router.post('/repositories', async (req, res) => {
  *       500:
  *         description: Server error
  */
-router.get('/recommended', async (req, res) => {
+router.get('/knownrepositories', async (req, res) => {
   try {
-    const recommended = await hubService.getRecommendedRepositories();
-    res.json(recommended);
+    const known = await hubService.getKnownRepositories();
+    res.json(known);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -242,7 +242,7 @@ router.get('/recommended', async (req, res) => {
  * /mos/hub/update:
  *   post:
  *     summary: Update repositories
- *     description: Downloads all configured repositories via git clone
+ *     description: Refreshes the known repositories list and downloads all configured and known repositories via git clone
  *     tags: [MOS Hub]
  *     security:
  *       - bearerAuth: []

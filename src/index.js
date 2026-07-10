@@ -589,13 +589,6 @@ async function startServer() {
     } catch (error) {
       console.error(`Error initializing supporter status: ${error.message}`);
     }
-
-    try {
-      const hubService = require('./services/hub.service');
-      await hubService.initRecommendedRepositories();
-    } catch (error) {
-      console.error(`Error initializing recommended repositories: ${error.message}`);
-    }
   }
 
   // Create HTTP server, attach Socket.io and VNC upgrade handling

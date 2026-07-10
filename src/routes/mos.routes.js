@@ -563,6 +563,10 @@ const { checkRole } = require('../middleware/auth.middleware');
      *               type: string
      *               description: Cron schedule for update checks
      *               example: "0 1 * * *"
+     *         logsize:
+     *           type: integer
+     *           description: Size of the /var/log tmpfs in MB (default 200). Changing this remounts /var/log with the new size.
+     *           example: 200
  *     Keymap:
  *       type: object
  *       properties:
@@ -2229,6 +2233,10 @@ router.get('/settings/system', async (req, res) => {
  *                     type: string
  *                     description: Cron schedule for update checks
  *                     example: "0 1 * * *"
+ *               logsize:
+ *                 type: integer
+ *                 description: Size of the /var/log tmpfs in MB (default 200). Changing this remounts /var/log with the new size.
+ *                 example: 200
  *     responses:
  *       200:
  *         description: System settings updated successfully

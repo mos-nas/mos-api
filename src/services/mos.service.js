@@ -3756,6 +3756,7 @@ class MosService {
         enabled: false,
         update_check_schedule: '15 9 * * *'
       },
+      logsize: 200,
       supporter_key: ''
     };
   }
@@ -3815,7 +3816,7 @@ class MosService {
         if (error.code !== 'ENOENT') throw error;
       }
       // Only allowed fields are updated
-      const allowed = ['hostname', 'global_spindown', 'keymap', 'timezone', 'display', 'persist_history', 'persist_notifications', 'ntp', 'notification_sound', 'cpufreq', 'swapfile', 'binfmt', 'webui', 'update_check', 'supporter_key'];
+      const allowed = ['hostname', 'global_spindown', 'keymap', 'timezone', 'display', 'persist_history', 'persist_notifications', 'ntp', 'notification_sound', 'cpufreq', 'swapfile', 'binfmt', 'webui', 'update_check', 'logsize', 'supporter_key'];
       let supporterKeyChanged = false;
       let ntpChanged = false;
       let swapfileUpdate = null;
@@ -3832,6 +3833,7 @@ class MosService {
       let localDnsSearchnameChanged = false;
       let updateCheckChanged = false;
       let globalSpindownChanged = false;
+      let logsizeChanged = false;
 
       for (const key of Object.keys(updates)) {
         if (!allowed.includes(key)) {
@@ -4098,6 +4100,12 @@ class MosService {
             globalSpindownChanged = true;
           }
           current[key] = isNaN(newValue) ? current[key] : newValue;
+        } else if (key === 'logsize') {
+          const newValue = parseInt(updates.logsize, 10);
+          if (!isNaN(newValue) && newValue !== current.logsize) {
+            logsizeChanged = true;
+          }
+          current[key] = isNaN(newValue) ? current[key] : newValue;
         } else if (key === 'hostname') {
           if (updates.hostname !== current.hostname) {
             hostnameChanged = true;
@@ -4245,6 +4253,15 @@ class MosService {
       // Restart all spindown watchdogs if global_spindown changed
       if (globalSpindownChanged) {
         await this.restartSpindownWatchdogs();
+      }
+
+      // Remount /var/log tmpfs with new size if logsize changed
+      if (logsizeChanged) {
+        try {
+          await execPromise(`mount -t tmpfs -o size=${current.logsize}m tmpfs /var/log`);
+        } catch (error) {
+          console.warn('Warning: Could not remount /var/log tmpfs:', error.message);
+        }
       }
 
       // Handle swapfile configuration update
