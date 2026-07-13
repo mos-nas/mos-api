@@ -468,7 +468,8 @@ class DockerComposeService {
     try {
       const filePath = this._getComposeContainersPath();
       const data = await fs.readFile(filePath, 'utf8');
-      return JSON.parse(data);
+      const parsed = data.trim() ? JSON.parse(data) : [];
+      return Array.isArray(parsed) ? parsed : [];
     } catch (error) {
       if (error.code === 'ENOENT') {
         return []; // File doesn't exist, return empty array
@@ -490,7 +491,10 @@ class DockerComposeService {
       // Ensure directory exists
       await fs.mkdir(dir, { recursive: true });
 
-      await fs.writeFile(filePath, JSON.stringify(data, null, 2), 'utf8');
+      // Atomic write (tmp + rename)
+      const tmpPath = `${filePath}.tmp`;
+      await fs.writeFile(tmpPath, JSON.stringify(data, null, 2), 'utf8');
+      await fs.rename(tmpPath, filePath);
     } catch (error) {
       throw new Error(`Failed to write compose-containers: ${error.message}`);
     }

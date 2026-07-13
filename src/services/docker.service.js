@@ -44,6 +44,18 @@ class DockerService {
   }
 
   /**
+   * Atomically writes JSON data to a file
+   * @param {string} filePath - Target file path
+   * @param {*} data - Data to serialize as JSON
+   * @returns {Promise<void>}
+   */
+  async _writeJsonAtomic(filePath, data) {
+    const tmpPath = `${filePath}.tmp`;
+    await fs.writeFile(tmpPath, JSON.stringify(data, null, 2), 'utf8');
+    await fs.rename(tmpPath, filePath);
+  }
+
+  /**
    * Reads the Docker containers file and checks for available updates
    * @returns {Promise<Array>} Array of Docker images with update status
    */
@@ -54,7 +66,10 @@ class DockerService {
 
       // Read file
       const data = await fs.readFile(filePath, 'utf8');
-      let images = JSON.parse(data);
+      let images = data.trim() ? JSON.parse(data) : [];
+      if (!Array.isArray(images)) {
+        images = [];
+      }
 
       // Lazy cleanup: remove orphaned entries not present in Docker
       try {
@@ -64,7 +79,10 @@ class DockerService {
         );
 
         const originalLength = images.length;
-        images = images.filter(image => dockerContainers.has(image.name));
+        // Skip cleanup if Docker reports no containers at all
+        if (dockerContainers.size > 0) {
+          images = images.filter(image => dockerContainers.has(image.name));
+        }
 
         if (images.length < originalLength) {
           // Reindex remaining entries
@@ -72,7 +90,7 @@ class DockerService {
           images.forEach((image, i) => { image.index = i + 1; });
 
           // Write cleaned file back
-          await fs.writeFile(filePath, JSON.stringify(images, null, 2), 'utf8');
+          await this._writeJsonAtomic(filePath, images);
         }
       } catch (dockerError) {
         // Docker daemon not available - skip cleanup
@@ -252,7 +270,10 @@ class DockerService {
 
       // Read current file
       const data = await fs.readFile(filePath, 'utf8');
-      const currentContainers = JSON.parse(data);
+      let currentContainers = data.trim() ? JSON.parse(data) : [];
+      if (!Array.isArray(currentContainers)) {
+        currentContainers = [];
+      }
 
       // Create a map of names to new properties (index and wait)
       const updateMap = {};
@@ -279,7 +300,7 @@ class DockerService {
       });
 
       // Write the updated container list back to the file
-      await fs.writeFile(filePath, JSON.stringify(updatedContainers, null, 2), 'utf8');
+      await this._writeJsonAtomic(filePath, updatedContainers);
 
       // Update template files if no_autoupdate changed
       for (const container of containers) {
@@ -665,9 +686,12 @@ class DockerService {
           throw err;
         }
 
-        // Read containers file
+        // Read containers file (tolerate empty/invalid content)
         const containersData = await fs.readFile(containersFilePath, 'utf8');
-        let containers = JSON.parse(containersData);
+        let containers = containersData.trim() ? JSON.parse(containersData) : [];
+        if (!Array.isArray(containers)) {
+          containers = [];
+        }
 
         // Remove the container with the specified name
         const originalLength = containers.length;
@@ -684,7 +708,7 @@ class DockerService {
           });
 
           // Write the updated containers list back to file
-          await fs.writeFile(containersFilePath, JSON.stringify(containers, null, 2), 'utf8');
+          await this._writeJsonAtomic(containersFilePath, containers);
         }
       } catch (containerFileError) {
         // If updating the containers file fails, log the warning but don't fail the removal
