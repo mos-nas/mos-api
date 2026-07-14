@@ -3586,10 +3586,10 @@ class MosService {
       }
       if (sambaDiscoveryChanged) {
         if (sambaDiscoveryValue === false) {
-          await execPromise('/etc/init.d/nmbd stop');
+          //await execPromise('/etc/init.d/nmbd stop');
           await execPromise('/etc/init.d/wsddn stop');
         } else if (sambaDiscoveryValue === true) {
-          await execPromise('/etc/init.d/nmbd start');
+          //await execPromise('/etc/init.d/nmbd start');
           await execPromise('/etc/init.d/wsddn start');
         }
       }
