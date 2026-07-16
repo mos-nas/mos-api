@@ -84,6 +84,14 @@ class PlainDeviceStrategy extends DeviceStrategy {
     const preparedDevices = [];
 
     for (const device of devices) {
+      // Reject LUKS devices in import mode, pool must be configured as encrypted
+      if (options?.format === false) {
+        const fsInfo = await this.poolsService.checkDeviceFilesystem(device);
+        if (fsInfo.filesystem === 'crypto_LUKS') {
+          throw new Error(`Device ${device} is LUKS encrypted. Set config.encrypted to true and provide a passphrase to import it.`);
+        }
+      }
+
       preparedDevices.push({
         originalDevice: device,
         physicalDevice: device,
@@ -143,6 +151,15 @@ class LuksDeviceStrategy extends DeviceStrategy {
 
     // Check if devices are already LUKS encrypted or need encryption
     const isCreatingNewPool = !pool.id;
+
+    // Import mode requires a passphrase or existing keyfile to open LUKS devices
+    if (options.format === false && (!passphrase || passphrase.trim() === '')) {
+      const keyfilePath = path.join(this.luksKeyDir, `${poolName}.key`);
+      const hasKeyfile = await fs.access(keyfilePath).then(() => true, () => false);
+      if (!hasKeyfile) {
+        throw new Error(`Importing encrypted devices for pool '${poolName}' requires a passphrase (no keyfile found).`);
+      }
+    }
 
     try {
       for (let i = 0; i < devices.length; i++) {

@@ -3391,7 +3391,7 @@ class MosService {
       let nutChanged = false, nutValue = null;
       let sshChanged = false, sshValue = null;
       let sambaDiscoveryChanged = false, sambaDiscoveryValue = null;
-      let tailscaleChanged = false, tailscaleValue = null;
+      let tailscaleChanged = false, tailscaleValue = null, tailscaleWebChanged = false;
       let netbirdChanged = false, netbirdValue = null;
       let remoteMountingChanged = false, remoteMountingValue = null;
       let dnsmasqChanged = false, dnsmasqValue = null;
@@ -3500,12 +3500,22 @@ class MosService {
           current.services.tailscale.tailscaled_params = services.tailscale.tailscaled_params;
         if (services.tailscale.web !== undefined) {
           if (!current.services.tailscale.web) current.services.tailscale.web = {};
-          if (services.tailscale.web.enabled !== undefined)
-            current.services.tailscale.web.enabled = services.tailscale.web.enabled;
-          if (services.tailscale.web.address !== undefined)
-            current.services.tailscale.web.address = services.tailscale.web.address;
-          if (services.tailscale.web.port !== undefined)
-            current.services.tailscale.web.port = services.tailscale.web.port;
+          const currentWeb = current.services.tailscale.web;
+          if (services.tailscale.web.enabled !== undefined &&
+              currentWeb.enabled !== services.tailscale.web.enabled) {
+            currentWeb.enabled = services.tailscale.web.enabled;
+            tailscaleWebChanged = true;
+          }
+          if (services.tailscale.web.address !== undefined &&
+              currentWeb.address !== services.tailscale.web.address) {
+            currentWeb.address = services.tailscale.web.address;
+            tailscaleWebChanged = true;
+          }
+          if (services.tailscale.web.port !== undefined &&
+              currentWeb.port !== services.tailscale.web.port) {
+            currentWeb.port = services.tailscale.web.port;
+            tailscaleWebChanged = true;
+          }
         }
       }
 
@@ -3599,6 +3609,13 @@ class MosService {
         } else if (tailscaleValue === true) {
           await execPromise('/etc/init.d/tailscaled start');
         }
+      } else if (tailscaleWebChanged && current.services?.tailscale?.enabled === true) {
+        // Deferred fire-and-forget
+        setTimeout(() => {
+          execPromise('/etc/init.d/tailscaled restart').catch(err => {
+            console.warn('Warning: Could not restart tailscaled after web settings change:', err.message);
+          });
+        }, 3000);
       }
       if (netbirdChanged) {
         if (netbirdValue === false) {
