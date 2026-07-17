@@ -6,6 +6,7 @@ const path = require('path');
 const https = require('https');
 const os = require('os');
 const net = require('net');
+const crypto = require('crypto');
 
 const execPromise = util.promisify(exec);
 
@@ -571,6 +572,14 @@ class LxcService {
         console.warn(`Warning: Could not assign index to container ${containerName}: ${indexError.message}`);
       }
 
+      // Inject a unique MAC address into the network block before starting
+      try {
+        await this.setContainerMacAddress(containerName, this.generateMacAddress());
+      } catch (macError) {
+        // Don't fail container creation if MAC injection fails
+        console.warn(`Warning: Could not set MAC address for container ${containerName}: ${macError.message}`);
+      }
+
       // Setup unprivileged container if requested
       // This must happen before starting the container
       if (unprivileged === true) {
@@ -617,6 +626,42 @@ class LxcService {
       return result;
     } catch (error) {
       throw new Error(`Failed to create container ${containerName}: ${error.message}`);
+    }
+  }
+
+  /**
+   * Generate a random locally-administered MAC address with the 52:54:00 prefix
+   * @returns {string} MAC address in the form 52:54:00:XX:XX:XX
+   */
+  generateMacAddress() {
+    const suffix = crypto.randomBytes(3).toString('hex').toUpperCase();
+    const parts = suffix.match(/.{2}/g).join(':');
+    return `52:54:00:${parts}`;
+  }
+
+  /**
+   * Set the MAC address in the network block of a container config
+   * @param {string} containerName - Name of the container
+   * @param {string} mac - MAC address to set
+   * @returns {Promise<void>}
+   */
+  async setContainerMacAddress(containerName, mac) {
+    try {
+      const configPath = `/var/lib/lxc/${containerName}/config`;
+
+      if (!fs.existsSync(configPath)) {
+        throw new Error(`Config file not found for container ${containerName}`);
+      }
+
+      let configContent = fs.readFileSync(configPath, 'utf8');
+      // Skip if a hwaddr is already present (default.conf currently has none)
+      if (/^lxc\.net\.0\.hwaddr\s*=/m.test(configContent)) {
+        return;
+      }
+      configContent += `\nlxc.net.0.hwaddr = ${mac}`;
+      fs.writeFileSync(configPath, configContent);
+    } catch (error) {
+      throw new Error(`Failed to set MAC address for container ${containerName}: ${error.message}`);
     }
   }
 
