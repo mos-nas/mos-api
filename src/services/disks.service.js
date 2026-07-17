@@ -19,6 +19,9 @@ class DisksService {
     this.powerStatusCache = new Map();
     this.powerStatusCacheTTL = 15000; // 15 seconds cache (slightly longer to reduce smartctl pressure under I/O load)
 
+    // Authoritative rotation type from smartctl (device -> 'hdd'|'ssd'), fixes SAS drives with wrong sysfs rotational
+    this.rotationTypeCache = new Map();
+
     // Background I/O Stats Sampling
     this.diskStatsHistory = new Map(); // device -> { timestamp, readBytes, writeBytes, readSpeed, writeSpeed }
     this.diskStatsSamplingInterval = null;
@@ -854,11 +857,27 @@ class DisksService {
           active = true;
         }
 
+        // smartctl Rotation Rate is authoritative (SAS drives often report rotational=0 in sysfs)
+        const rotationMatch = output.match(/Rotation Rate:\s*(\d+)\s*rpm/i);
+        if (rotationMatch) {
+          this.rotationTypeCache.set(devicePath, 'hdd');
+        } else if (/Rotation Rate:\s*Solid State Device/i.test(output)) {
+          this.rotationTypeCache.set(devicePath, 'ssd');
+        }
+
+        let finalType = diskTypeInfo.type;
+        let finalRotational = diskTypeInfo.rotational;
+        const cachedRotation = this.rotationTypeCache.get(devicePath);
+        if (cachedRotation && (finalType === 'hdd' || finalType === 'ssd')) {
+          finalType = cachedRotation;
+          finalRotational = cachedRotation === 'hdd';
+        }
+
         return cacheAndReturn({
           status,
           active,
-          type: diskTypeInfo.type,
-          rotational: diskTypeInfo.rotational,
+          type: finalType,
+          rotational: finalRotational,
           removable: diskTypeInfo.removable,
           usbInfo: diskTypeInfo.usbInfo
         });

@@ -536,6 +536,8 @@ class SmartService {
     if (dev.tran === 'nvme') return 'nvme';
     const cached = serial ? this._rotationCache.get(serial) : null;
     if (cached) return cached;
+    // SAS drives often report rota=0 despite spinning; wait for smartctl rotation cache
+    if (dev.tran === 'sas') return 'hdd';
     if (dev.rota === false || dev.rota === 0 || dev.rota === '0') return 'ssd';
     if (parseInt(dev['disc-gran']) > 0) return 'ssd';
     return 'hdd';
