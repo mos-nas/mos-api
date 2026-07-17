@@ -558,6 +558,89 @@ router.post('/:id/automount', checkRole(['admin']), async (req, res) => {
 
 /**
  * @swagger
+ * /pools/{id}/shared:
+ *   post:
+ *     summary: Toggle shared mount propagation for a pool
+ *     description: Enable or disable shared mount propagation (mount --make-shared / --make-private) live without remounting; the setting is persisted and reapplied on mount (admin only)
+ *     tags: [Pools]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Pool ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - enabled
+ *             properties:
+ *               enabled:
+ *                 type: boolean
+ *                 description: Whether to enable (make-shared) or disable (make-private) shared propagation
+ *                 example: true
+ *     responses:
+ *       200:
+ *         description: Shared setting updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Shared enabled for pool 'data_pool' (ID: 1746318722394)"
+ *                 pool:
+ *                   $ref: '#/components/schemas/Pool'
+ *       400:
+ *         description: Invalid request parameters
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       404:
+ *         description: Pool not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+// Toggle shared mount propagation by ID (admin only)
+router.post('/:id/shared', checkRole(['admin']), async (req, res) => {
+  try {
+    const { enabled } = req.body;
+
+    if (typeof enabled !== 'boolean') {
+      return res.status(400).json({
+        error: 'enabled parameter must be a boolean'
+      });
+    }
+
+    // Use pools service directly
+    const result = await poolsService.toggleSharedById(req.params.id, enabled);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @swagger
  * /pools/{id}/comment:
  *   patch:
  *     summary: Update pool comment

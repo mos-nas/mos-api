@@ -5977,6 +5977,46 @@ class PoolsService {
   }
 
   /**
+   * Toggle shared mount propagation for a pool (live, no remount)
+   */
+  async toggleSharedById(poolId, shared) {
+    try {
+      if (typeof shared !== 'boolean') {
+        throw new Error('Shared value must be a boolean');
+      }
+
+      const pools = await this._readPools();
+      const poolIndex = pools.findIndex(p => p.id === poolId);
+
+      if (poolIndex === -1) {
+        throw new Error(`Pool with ID "${poolId}" not found`);
+      }
+
+      const pool = pools[poolIndex];
+      const mountPoint = path.join(this.mountBasePath, pool.name);
+
+      // Apply live propagation change only if pool is currently mounted
+      if (await this._isMounted(mountPoint)) {
+        const propagation = shared ? '--make-shared' : '--make-private';
+        await execPromise(`mount ${propagation} "${mountPoint}"`);
+      }
+
+      // Persist flag so it survives remount/reboot
+      if (!pool.config) pool.config = {};
+      pool.config.shared = shared;
+      await this._writePools(pools);
+
+      return {
+        success: true,
+        message: `Shared ${shared ? 'enabled' : 'disabled'} for pool "${pool.name}" (ID: ${poolId})`,
+        pool
+      };
+    } catch (error) {
+      throw new Error(`Error toggling shared: ${error.message}`);
+    }
+  }
+
+  /**
    * Update a pool's comment
    */
   async updatePoolComment(poolId, comment) {
