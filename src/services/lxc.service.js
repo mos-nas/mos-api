@@ -555,6 +555,14 @@ class LxcService {
       }
       await execPromise(command);
 
+      // Inject a unique MAC address into the network block before starting
+      try {
+        await this.setContainerMacAddress(containerName, this.generateMacAddress());
+      } catch (macError) {
+        // Don't fail container creation if MAC injection fails
+        console.warn(`Warning: Could not set MAC address for container ${containerName}: ${macError.message}`);
+      }
+
       // Set autostart configuration
       await this.setContainerAutostart(containerName, autostart);
 
@@ -570,14 +578,6 @@ class LxcService {
       } catch (indexError) {
         // Don't fail container creation if index assignment fails
         console.warn(`Warning: Could not assign index to container ${containerName}: ${indexError.message}`);
-      }
-
-      // Inject a unique MAC address into the network block before starting
-      try {
-        await this.setContainerMacAddress(containerName, this.generateMacAddress());
-      } catch (macError) {
-        // Don't fail container creation if MAC injection fails
-        console.warn(`Warning: Could not set MAC address for container ${containerName}: ${macError.message}`);
       }
 
       // Setup unprivileged container if requested
@@ -658,7 +658,7 @@ class LxcService {
       if (/^lxc\.net\.0\.hwaddr\s*=/m.test(configContent)) {
         return;
       }
-      configContent += `\nlxc.net.0.hwaddr = ${mac}`;
+      configContent = `${configContent.replace(/\s*$/, '')}\nlxc.net.0.hwaddr = ${mac}\n`;
       fs.writeFileSync(configPath, configContent);
     } catch (error) {
       throw new Error(`Failed to set MAC address for container ${containerName}: ${error.message}`);
