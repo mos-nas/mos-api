@@ -578,15 +578,17 @@ class HubService {
     const reposPath = '/var/mos/hub/repositories';
     const tempPath = '/var/mos/hub/temp';
 
-    // Refresh known repos and merge with configured or keep if failed
+    // Refresh the known repositories list (served via the knownrepositories
+    // endpoint); only the configured repos are cloned and indexed.
     await this.initKnownRepositories();
-    const urls = this._mergeRepoUrls(
-      await this.getRepositories(),
-      await this._readJsonFile(this.knownReposPath)
-    );
+    const urls = this._mergeRepoUrls(await this.getRepositories());
 
+    // No configured repos left -> clean cloned repos on disk and empty the index
     if (!urls || urls.length === 0) {
-      throw new Error('No repositories configured');
+      await fs.rm(tempPath, { recursive: true, force: true });
+      await fs.rm(reposPath, { recursive: true, force: true });
+      await this._saveIndex();
+      return { success: [], failed: [], total: 0 };
     }
 
     const results = {
@@ -655,7 +657,14 @@ class HubService {
    * @returns {Promise<void>}
    */
   async _saveIndex() {
-    const indexData = await this.buildIndex({});
+    const reposPath = '/var/mos/hub/repositories';
+    let indexData;
+    if (await this._exists(reposPath)) {
+      indexData = await this.buildIndex({});
+    } else {
+      const config = await this._readConfig();
+      indexData = { results: [], page_entries: config.page_entries || 24, count: 0 };
+    }
     await fs.mkdir(path.dirname(this.indexPath), { recursive: true });
     await fs.writeFile(this.indexPath, JSON.stringify(indexData, null, 2), 'utf8');
   }

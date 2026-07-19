@@ -510,9 +510,10 @@ class LxcService {
    * @param {string} containerDescription - Optional description for the container
    * @param {boolean} startAfterCreation - Whether to start container after creation (defaults to false)
    * @param {boolean} unprivileged - Whether to create an unprivileged container (defaults to false)
+   * @param {Array} mounts - Optional host bind mounts to inject (defaults to empty)
    * @returns {Promise<Object>} Result of the operation
    */
-  async createContainer(containerName, distribution, release, arch = (process.arch === 'arm64' ? 'arm64' : 'amd64'), autostart = false, containerDescription = null, startAfterCreation = false, unprivileged = false) {
+  async createContainer(containerName, distribution, release, arch = (process.arch === 'arm64' ? 'arm64' : 'amd64'), autostart = false, containerDescription = null, startAfterCreation = false, unprivileged = false, mounts = []) {
     try {
       // Check if container already exists
       const exists = await this.containerExists(containerName);
@@ -591,6 +592,11 @@ class LxcService {
         }
       }
 
+      // Inject host bind mounts before starting
+      if (Array.isArray(mounts) && mounts.length) {
+        await this.setContainerMounts(containerName, mounts, { mode: 'replace' });
+      }
+
       let startResult = null;
 
       // Start container if requested
@@ -663,6 +669,119 @@ class LxcService {
     } catch (error) {
       throw new Error(`Failed to set MAC address for container ${containerName}: ${error.message}`);
     }
+  }
+
+  /**
+   * Validate a single host bind-mount definition
+   * @param {Object} mount - Mount object { source, destination, readonly, type }
+   * @returns {boolean} True if valid
+   */
+  _isValidMountEntry(mount) {
+    if (!mount || typeof mount !== 'object') return false;
+    const { source, destination } = mount;
+    if (typeof source !== 'string' || typeof destination !== 'string') return false;
+    if (source.trim() === '' || destination.trim() === '') return false;
+    // Source must be an absolute host path; no whitespace/newlines (breaks the entry) or path traversal
+    if (!source.startsWith('/')) return false;
+    if (/\s/.test(source) || /\s/.test(destination)) return false;
+    if (source.includes('..') || destination.includes('..')) return false;
+    if (mount.type !== undefined && mount.type !== 'dir' && mount.type !== 'file') return false;
+    if (mount.readonly !== undefined && typeof mount.readonly !== 'boolean') return false;
+    return true;
+  }
+
+  /**
+   * Read all host bind mounts (lxc.mount.entry) from a container config
+   * @param {string} containerName - Name of the container
+   * @returns {Promise<Array>} Array of mount objects { source, destination, readonly, type }
+   */
+  async getContainerMounts(containerName) {
+    const configPath = `/var/lib/lxc/${containerName}/config`;
+    if (!fs.existsSync(configPath)) {
+      throw new Error(`Config file not found for container ${containerName}`);
+    }
+    const configContent = fs.readFileSync(configPath, 'utf8');
+    const mounts = [];
+    const regex = /^lxc\.mount\.entry\s*=\s*(\S+)\s+(\S+)\s+\S+\s+(\S+)/gm;
+    let match;
+    while ((match = regex.exec(configContent)) !== null) {
+      const [, source, target, options] = match;
+      mounts.push({
+        source,
+        destination: `/${target.replace(/^\/+/, '')}`,
+        readonly: /(^|,)ro(,|$)/.test(options),
+        type: /create=file/.test(options) ? 'file' : 'dir'
+      });
+    }
+    return mounts;
+  }
+
+  /**
+   * Set host bind mounts (lxc.mount.entry) for a container
+   * @param {string} containerName - Name of the container
+   * @param {Array} mounts - Array of mount objects { source, destination, readonly, type }
+   * @param {Object} options - { mode: 'replace' | 'append' }
+   * @returns {Promise<Array>} The resulting list of mounts
+   */
+  async setContainerMounts(containerName, mounts, { mode = 'replace' } = {}) {
+    try {
+      const configPath = `/var/lib/lxc/${containerName}/config`;
+      if (!fs.existsSync(configPath)) {
+        throw new Error(`Config file not found for container ${containerName}`);
+      }
+      if (!Array.isArray(mounts)) {
+        throw new Error('Mounts must be an array');
+      }
+      for (const mount of mounts) {
+        if (!this._isValidMountEntry(mount)) {
+          throw new Error('Invalid mount entry. Source must be an absolute path; source and destination must not contain spaces or "..".');
+        }
+      }
+
+      const key = (source, destination) => `${source}|${String(destination).replace(/^\/+/, '')}`;
+
+      // Merge with existing entries when appending, dedupe by source+destination
+      let finalMounts = mounts;
+      if (mode === 'append') {
+        const existing = await this.getContainerMounts(containerName);
+        const seen = new Set(existing.map(m => key(m.source, m.destination)));
+        finalMounts = [...existing, ...mounts.filter(m => !seen.has(key(m.source, m.destination)))];
+      }
+
+      let configContent = fs.readFileSync(configPath, 'utf8');
+      // Remove all existing mount entries, then append the final set
+      configContent = configContent.replace(/^lxc\.mount\.entry\s*=.*$\n?/gm, '');
+      const entryLines = finalMounts.map(m => {
+        const target = m.destination.replace(/^\/+/, '');
+        const create = m.type === 'file' ? 'create=file' : 'create=dir';
+        const opts = m.readonly ? `bind,ro,${create}` : `bind,${create}`;
+        return `lxc.mount.entry = ${m.source} ${target} none ${opts} 0 0`;
+      });
+      if (entryLines.length) {
+        configContent = `${configContent.replace(/\s*$/, '')}\n${entryLines.join('\n')}\n`;
+      }
+      fs.writeFileSync(configPath, configContent);
+      return finalMounts;
+    } catch (error) {
+      throw new Error(`Failed to set mounts for container ${containerName}: ${error.message}`);
+    }
+  }
+
+  /**
+   * Remove specific host bind mounts from a container config
+   * @param {string} containerName - Name of the container
+   * @param {Array} mounts - Mounts to remove, matched by source + destination
+   * @returns {Promise<Array>} The remaining list of mounts
+   */
+  async removeContainerMounts(containerName, mounts) {
+    if (!Array.isArray(mounts) || mounts.length === 0) {
+      throw new Error('Mounts to remove must be a non-empty array');
+    }
+    const key = (source, destination) => `${source}|${String(destination).replace(/^\/+/, '')}`;
+    const existing = await this.getContainerMounts(containerName);
+    const toRemove = new Set(mounts.map(m => key(m.source, m.destination)));
+    const remaining = existing.filter(m => !toRemove.has(key(m.source, m.destination)));
+    return this.setContainerMounts(containerName, remaining, { mode: 'replace' });
   }
 
   /**
@@ -1055,6 +1174,7 @@ lxc.mount.auto = cgroup:mixed:force
    * @param {Object} options - Configuration options
    * @param {boolean} options.autostart - Whether container should autostart
    * @param {string} options.description - Description for the container
+   * @param {Array} options.mounts - Full set of host bind mounts (replaces existing)
    * @returns {Promise<Object>} Result of the operation
    */
   async updateContainerConfig(containerName, options = {}) {
@@ -1089,6 +1209,11 @@ lxc.mount.auto = cgroup:mixed:force
           await this.setContainerDescription(containerName, options.description);
         }
         updates.description = options.description;
+      }
+
+      // Update host bind mounts if provided (full replacement)
+      if (options.mounts !== undefined) {
+        updates.mounts = await this.setContainerMounts(containerName, options.mounts, { mode: 'replace' });
       }
 
       return {

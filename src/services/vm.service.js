@@ -1260,12 +1260,19 @@ class VmService {
   </features>`;
 
     // CPU mode: host-passthrough for KVM (native), emulated qemu64 for TCG (cross-arch)
+    // Explicit topology: single socket, one core per vCPU, single thread
     if (domainType === 'kvm') {
       xml += `
-  <cpu mode='host-passthrough' check='none' migratable='on'/>`;
+  <cpu mode='host-passthrough' check='none' migratable='on'>
+    <topology sockets='1' cores='${effectiveCpus}' threads='1'/>
+    <cache mode='passthrough'/>
+  </cpu>`;
     } else {
       xml += `
-  <cpu mode='custom' match='exact'><model fallback='allow'>qemu64</model></cpu>`;
+  <cpu mode='custom' match='exact'>
+    <model fallback='allow'>qemu64</model>
+    <topology sockets='1' cores='${effectiveCpus}' threads='1'/>
+  </cpu>`;
     }
 
     xml += `

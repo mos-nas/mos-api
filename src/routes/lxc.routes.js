@@ -101,6 +101,34 @@ const { checkRole } = require('../middleware/auth.middleware');
  *           description: Whether to create an unprivileged container (defaults to false)
  *           default: false
  *           example: false
+ *         mounts:
+ *           type: array
+ *           description: Optional host bind mounts to inject into the container config
+ *           items:
+ *             $ref: '#/components/schemas/MountEntry'
+ *     MountEntry:
+ *       type: object
+ *       required:
+ *         - source
+ *         - destination
+ *       properties:
+ *         source:
+ *           type: string
+ *           description: Absolute host path (no spaces or "..")
+ *           example: "/mnt/pool/data"
+ *         destination:
+ *           type: string
+ *           description: Path inside the container
+ *           example: "/mnt/data"
+ *         readonly:
+ *           type: boolean
+ *           description: Mount read-only (defaults to false)
+ *           default: false
+ *         type:
+ *           type: string
+ *           enum: [dir, file]
+ *           description: Bind target type (defaults to dir)
+ *           default: dir
  *     ImageInfo:
  *       type: object
  *       properties:
@@ -622,14 +650,14 @@ router.post('/containers/:name/unfreeze', async (req, res) => {
  */
 router.post('/containers/create', async (req, res) => {
   try {
-    const { name, distribution, release, arch, autostart, description, start_after_creation, unprivileged } = req.body;
+    const { name, distribution, release, arch, autostart, description, start_after_creation, unprivileged, mounts } = req.body;
 
     // Validate required fields
     if (!name || !distribution || !release) {
       return res.status(400).json({ error: 'Name, distribution and release are required' });
     }
 
-    const result = await lxcService.createContainer(name, distribution, release, arch, autostart, description, start_after_creation, unprivileged);
+    const result = await lxcService.createContainer(name, distribution, release, arch, autostart, description, start_after_creation, unprivileged, mounts);
     res.json(result);
   } catch (error) {
     // Check for specific validation errors
@@ -637,6 +665,9 @@ router.post('/containers/create', async (req, res) => {
       return res.status(400).json({ error: error.message });
     }
     if (error.message.includes('Invalid characters in description')) {
+      return res.status(400).json({ error: error.message });
+    }
+    if (error.message.includes('Invalid mount entry')) {
       return res.status(400).json({ error: error.message });
     }
     // Check if it's a "container already exists" error
@@ -730,6 +761,104 @@ router.get('/images', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+/**
+ * @swagger
+ * /lxc/containers/{name}/mounts:
+ *   get:
+ *     summary: List host bind mounts of a container
+ *     tags: [LXC]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: name
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: List of mounts
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 $ref: '#/components/schemas/MountEntry'
+ *   post:
+ *     summary: Add host bind mount(s) to a container
+ *     description: Appends mounts (single object or array), deduping by source+destination. Applied on next container start.
+ *     tags: [LXC]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: name
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             oneOf:
+ *               - $ref: '#/components/schemas/MountEntry'
+ *               - type: array
+ *                 items:
+ *                   $ref: '#/components/schemas/MountEntry'
+ *     responses:
+ *       200:
+ *         description: Resulting list of mounts
+ *   put:
+ *     summary: Replace all host bind mounts of a container
+ *     description: Replaces the full set of mounts with the provided array. Applied on next container start.
+ *     tags: [LXC]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: name
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: array
+ *             items:
+ *               $ref: '#/components/schemas/MountEntry'
+ *     responses:
+ *       200:
+ *         description: Resulting list of mounts
+ *   delete:
+ *     summary: Remove specific host bind mount(s) from a container
+ *     description: Removes mounts matched by source+destination (single object or array). Applied on next container start.
+ *     tags: [LXC]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: name
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             oneOf:
+ *               - $ref: '#/components/schemas/MountEntry'
+ *               - type: array
+ *                 items:
+ *                   $ref: '#/components/schemas/MountEntry'
+ *     responses:
+ *       200:
+ *         description: Remaining list of mounts
+ */
 
 /**
  * @swagger
@@ -893,11 +1022,11 @@ router.delete('/containers/:name', async (req, res) => {
 router.put('/containers/:name', async (req, res) => {
   try {
     const { name } = req.params;
-    const { autostart, description } = req.body;
+    const { autostart, description, mounts } = req.body;
 
     // Validate that at least one field is provided
-    if (typeof autostart !== 'boolean' && description === undefined) {
-      return res.status(400).json({ error: 'At least one field (autostart or description) must be provided' });
+    if (typeof autostart !== 'boolean' && description === undefined && mounts === undefined) {
+      return res.status(400).json({ error: 'At least one field (autostart, description or mounts) must be provided' });
     }
 
     const options = {};
@@ -907,6 +1036,9 @@ router.put('/containers/:name', async (req, res) => {
     if (description !== undefined) {
       options.description = description;
     }
+    if (mounts !== undefined) {
+      options.mounts = mounts;
+    }
 
     const result = await lxcService.updateContainerConfig(name, options);
     res.json(result);
@@ -915,7 +1047,59 @@ router.put('/containers/:name', async (req, res) => {
     if (error.message.includes('does not exist')) {
       return res.status(400).json({ error: error.message });
     }
+    if (error.message.includes('Invalid mount entry') || error.message.includes('Mounts must be an array')) {
+      return res.status(400).json({ error: error.message });
+    }
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Map mount-related errors to the correct HTTP status
+function handleMountError(res, error) {
+  if (error.message.includes('not found') || error.message.includes('does not exist')) {
+    return res.status(404).json({ error: error.message });
+  }
+  if (error.message.includes('Invalid mount entry') || error.message.includes('must be')) {
+    return res.status(400).json({ error: error.message });
+  }
+  return res.status(500).json({ error: error.message });
+}
+
+router.get('/containers/:name/mounts', async (req, res) => {
+  try {
+    const result = await lxcService.getContainerMounts(req.params.name);
+    res.json(result);
+  } catch (error) {
+    handleMountError(res, error);
+  }
+});
+
+router.post('/containers/:name/mounts', async (req, res) => {
+  try {
+    const mounts = Array.isArray(req.body) ? req.body : [req.body];
+    const result = await lxcService.setContainerMounts(req.params.name, mounts, { mode: 'append' });
+    res.json(result);
+  } catch (error) {
+    handleMountError(res, error);
+  }
+});
+
+router.put('/containers/:name/mounts', async (req, res) => {
+  try {
+    const result = await lxcService.setContainerMounts(req.params.name, req.body, { mode: 'replace' });
+    res.json(result);
+  } catch (error) {
+    handleMountError(res, error);
+  }
+});
+
+router.delete('/containers/:name/mounts', async (req, res) => {
+  try {
+    const mounts = Array.isArray(req.body) ? req.body : [req.body];
+    const result = await lxcService.removeContainerMounts(req.params.name, mounts);
+    res.json(result);
+  } catch (error) {
+    handleMountError(res, error);
   }
 });
 
