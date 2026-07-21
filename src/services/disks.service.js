@@ -13,6 +13,10 @@ const MOS_NOTIFY_SOCKET = '/var/run/mos-notify.sock';
 const PRECLEAR_LOG_DIR = '/var/log/preclear';
 const PRECLEAR_LOG_MAX_SIZE = 5 * 1024 * 1024; // 5MB
 
+// Disk descriptions (persistent metadata, lazy write)
+const DISKS_CONFIG_PATH = '/boot/config/system/disks.json';
+const DISKS_CONFIG_DIR = '/boot/config/system';
+
 class DisksService {
   constructor() {
     // Cache for power status (prevents multiple smartctl calls within short time)
@@ -34,6 +38,9 @@ class DisksService {
     // Preclear tracking
     this.preclearRunning = new Map(); // device -> { algorithm, currentPass, totalPasses, startedAt }
     this.preclearProcesses = new Map(); // device -> { process, aborted }
+
+    // Disk descriptions cache (serial -> { description, model }); null = not loaded
+    this.descriptions = null;
   }
 
   // ============================================================
@@ -3446,6 +3453,169 @@ class DisksService {
     } catch {
       return null;
     }
+  }
+
+  // ============================================================
+  // DISK DESCRIPTIONS (persistent metadata, lazy write)
+  // ============================================================
+
+  /**
+   * Load disk descriptions from disk into cache (once, lazy)
+   * @private
+   */
+  async _loadDescriptions() {
+    try {
+      const data = await fs.readFile(DISKS_CONFIG_PATH, 'utf8');
+      const parsed = JSON.parse(data);
+      this.descriptions = parsed.disks || {};
+    } catch {
+      this.descriptions = {};
+    }
+  }
+
+  /**
+   * Persist descriptions cache to disk (only called on change)
+   * @private
+   */
+  async _saveDescriptions() {
+    try {
+      await fs.mkdir(DISKS_CONFIG_DIR, { recursive: true });
+      await fs.writeFile(DISKS_CONFIG_PATH, JSON.stringify({ disks: this.descriptions }, null, 2), 'utf8');
+    } catch (error) {
+      console.error(`[DisksService] Failed to save disks.json: ${error.message}`);
+    }
+  }
+
+  /**
+   * Ensure the descriptions cache is loaded (safe to call repeatedly)
+   */
+  async ensureDescriptionsLoaded() {
+    if (this.descriptions === null) await this._loadDescriptions();
+  }
+
+  /**
+   * Get the description for a disk by serial (from cache, no disk I/O)
+   * @param {string} serial - Disk serial number
+   * @returns {string|null} Description or null if none set
+   */
+  getDescription(serial) {
+    if (!serial || !this.descriptions) return null;
+    const entry = this.descriptions[serial];
+    return entry ? entry.description : null;
+  }
+
+  /**
+   * Set or clear the description for a disk (addressed by device name/path).
+   * Empty/null description removes the entry. Writes only on change.
+   * @param {string} device - Device name or path (e.g. 'sda' or '/dev/sda')
+   * @param {string|null} description - Description text, empty/null to clear
+   * @returns {Object} Result with serial and description
+   */
+  async setDescription(device, description) {
+    await this.ensureDescriptionsLoaded();
+    const { serial, model } = await this._getDeviceSerialAndModel(device);
+    if (!serial) throw new Error(`Could not resolve serial for device ${device}`);
+
+    const text = typeof description === 'string' ? description.trim() : '';
+    if (!text) {
+      if (this.descriptions[serial]) {
+        delete this.descriptions[serial];
+        await this._saveDescriptions();
+      }
+      return { serial, description: null };
+    }
+
+    this.descriptions[serial] = { description: text, model: model || 'Unknown' };
+    await this._saveDescriptions();
+    return { serial, description: text };
+  }
+
+  /**
+   * List described disks whose serial is not currently present (orphaned)
+   * @returns {Promise<Array>} Orphaned description entries
+   */
+  async getOrphanedDescriptions() {
+    await this.ensureDescriptionsLoaded();
+    const present = await this._getPresentSerials();
+    const orphaned = [];
+    for (const [serial, entry] of Object.entries(this.descriptions)) {
+      if (!present.has(serial)) {
+        orphaned.push({ serial, description: entry.description, model: entry.model || null });
+      }
+    }
+    return orphaned;
+  }
+
+  /**
+   * Delete a single orphaned description by serial
+   * @param {string} serial - Serial number
+   * @returns {Object} Success result
+   */
+  async deleteOrphanDescription(serial) {
+    await this.ensureDescriptionsLoaded();
+    if (!this.descriptions[serial]) throw new Error(`Description for serial ${serial} not found`);
+    const present = await this._getPresentSerials();
+    if (present.has(serial)) throw new Error(`Disk ${serial} is currently present, not an orphan`);
+    delete this.descriptions[serial];
+    await this._saveDescriptions();
+    return { success: true, message: `Orphaned description ${serial} removed` };
+  }
+
+  /**
+   * Delete all orphaned descriptions
+   * @returns {Object} Success result with count
+   */
+  async deleteAllOrphanDescriptions() {
+    await this.ensureDescriptionsLoaded();
+    const present = await this._getPresentSerials();
+    let count = 0;
+    for (const serial of Object.keys(this.descriptions)) {
+      if (!present.has(serial)) {
+        delete this.descriptions[serial];
+        count++;
+      }
+    }
+    if (count > 0) await this._saveDescriptions();
+    return { success: true, message: `${count} orphaned descriptions removed`, count };
+  }
+
+  /**
+   * Get serial + model of a disk in a single lsblk call (safe, no disk wakeup)
+   * @param {string} device - Device name or path (e.g. '/dev/sdb1' or 'sdb')
+   * @returns {Promise<{serial: string|null, model: string|null}>}
+   * @private
+   */
+  async _getDeviceSerialAndModel(device) {
+    try {
+      const baseDisk = this._getBaseDisk(
+        device.startsWith('/dev/') ? device : `/dev/${device}`
+      );
+      const { stdout } = await execPromise(`lsblk -Jdo SERIAL,MODEL ${baseDisk} 2>/dev/null`);
+      const data = JSON.parse(stdout);
+      const dev = data.blockdevices && data.blockdevices[0];
+      return { serial: (dev && dev.serial) || null, model: (dev && dev.model) || null };
+    } catch {
+      return { serial: null, model: null };
+    }
+  }
+
+  /**
+   * Get the set of serials for all currently present physical disks (safe, no wakeup)
+   * @returns {Promise<Set<string>>} Present serial numbers
+   * @private
+   */
+  async _getPresentSerials() {
+    const serials = new Set();
+    try {
+      const { stdout } = await execPromise('lsblk -Jndo SERIAL,TYPE 2>/dev/null');
+      const data = JSON.parse(stdout);
+      if (data.blockdevices) {
+        for (const dev of data.blockdevices) {
+          if (dev.type === 'disk' && dev.serial) serials.add(dev.serial);
+        }
+      }
+    } catch { /* ignore */ }
+    return serials;
   }
 
   /**

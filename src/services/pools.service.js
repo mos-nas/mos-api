@@ -9457,6 +9457,7 @@ class PoolsService {
       // Lazy import to avoid circular dependency
       // Note: disks.service exports an instance
       const disksService = require('./disks.service');
+      await disksService.ensureDescriptionsLoaded();
 
       // Use cached disk info map if available (model/serial are static, 30s TTL)
       // This avoids calling getAllDisks() (which runs smartctl per disk) on every listPools()
@@ -9510,6 +9511,7 @@ class PoolsService {
             diskSerial: 'Unknown'
           };
         }
+        device.description = disksService.getDescription(device.diskInfo.diskSerial);
       }
 
       // Inject disk info into parity devices
@@ -9540,6 +9542,7 @@ class PoolsService {
             diskSerial: 'Unknown'
           };
         }
+        device.description = disksService.getDescription(device.diskInfo.diskSerial);
       }
     } catch (error) {
       console.warn(`Warning: Could not inject disk info into devices: ${error.message}`);

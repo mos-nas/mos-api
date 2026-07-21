@@ -3012,6 +3012,48 @@ class MosService {
         }
       }
 
+      // Bridge cleanup: drop stale members no longer 'bridged', remove bridges without valid members
+      for (const bridge of current.interfaces.filter(i => i.type === 'bridge')) {
+        if (!Array.isArray(bridge.interfaces)) {
+          bridge.interfaces = [];
+          continue;
+        }
+        const validMembers = bridge.interfaces.filter(name => {
+          const member = current.interfaces.find(i => i.name === name);
+          return member && member.type === 'bridged';
+        });
+        if (validMembers.length !== bridge.interfaces.length) {
+          bridge.interfaces = validMembers;
+          interfacesChanged = true;
+        }
+      }
+      const emptyBridges = current.interfaces.filter(i => i.type === 'bridge' && (!Array.isArray(i.interfaces) || i.interfaces.length === 0));
+      for (const emptyBridge of emptyBridges) {
+        current.interfaces = current.interfaces.filter(i => i.name !== emptyBridge.name);
+        interfacesChanged = true;
+      }
+
+      // Bond cleanup: drop stale members no longer 'bonded', remove bonds without valid members
+      for (const bond of current.interfaces.filter(i => i.type === 'bond')) {
+        if (!Array.isArray(bond.interfaces)) {
+          bond.interfaces = [];
+          continue;
+        }
+        const validMembers = bond.interfaces.filter(name => {
+          const member = current.interfaces.find(i => i.name === name);
+          return member && member.type === 'bonded';
+        });
+        if (validMembers.length !== bond.interfaces.length) {
+          bond.interfaces = validMembers;
+          interfacesChanged = true;
+        }
+      }
+      const emptyBonds = current.interfaces.filter(i => i.type === 'bond' && (!Array.isArray(i.interfaces) || i.interfaces.length === 0));
+      for (const emptyBond of emptyBonds) {
+        current.interfaces = current.interfaces.filter(i => i.name !== emptyBond.name);
+        interfacesChanged = true;
+      }
+
       // Validate: every bonded interface must be referenced by an active bond
       for (const iface of current.interfaces) {
         if (iface.type === 'bonded') {

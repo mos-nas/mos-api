@@ -173,6 +173,11 @@ const { checkRole, authenticateToken } = require('../middleware/auth.middleware'
  *           type: boolean
  *           description: True if any monitored SMART attribute has a non-zero raw value
  *           example: false
+ *         description:
+ *           type: string
+ *           nullable: true
+ *           description: User-defined description for the disk (null if none set)
+ *           example: "Media Pool Disk 3"
  *     DiskUsage:
  *       type: object
  *       properties:
@@ -520,9 +525,11 @@ router.get('/', authenticateToken, async (req, res) => {
     };
 
     const disks = await disksService.getAllDisks(options, req.user);
+    await disksService.ensureDescriptionsLoaded();
     for (const disk of disks) {
       disk.smartWarning = disk.serial ? smartService.hasDiskWarning(disk.serial) : false;
       disk.temperatureStatus = disk.serial ? smartService.getDiskTemperatureStatus(disk.serial) : null;
+      disk.description = disk.serial ? disksService.getDescription(disk.serial) : null;
     }
     res.json(disks);
   } catch (error) {
@@ -977,6 +984,189 @@ router.get('/:device/smart', async (req, res) => {
     });
     res.json(smartInfo);
   } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @swagger
+ * /disks/descriptions/orphaned:
+ *   get:
+ *     summary: List orphaned disk descriptions
+ *     description: Get all disk descriptions whose disk is no longer physically present
+ *     tags: [Disks]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Orphaned descriptions retrieved
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   serial:
+ *                     type: string
+ *                     example: "5PJJ26DF"
+ *                   description:
+ *                     type: string
+ *                     example: "Media Pool Disk 3"
+ *                   model:
+ *                     type: string
+ *                     nullable: true
+ *                     example: "WDC WD120EDAZ-11F3RA0"
+ *       500:
+ *         description: Server error
+ */
+router.get('/descriptions/orphaned', authenticateToken, async (req, res) => {
+  try {
+    res.json(await disksService.getOrphanedDescriptions());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @swagger
+ * /disks/descriptions/orphaned:
+ *   delete:
+ *     summary: Delete all orphaned disk descriptions
+ *     description: Remove all descriptions whose disk is no longer physically present (admin only)
+ *     tags: [Disks]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: All orphaned descriptions deleted
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "2 orphaned descriptions removed"
+ *                 count:
+ *                   type: integer
+ *                   example: 2
+ *       403:
+ *         description: Admin permission required
+ *       500:
+ *         description: Server error
+ */
+router.delete('/descriptions/orphaned', checkRole(['admin']), async (req, res) => {
+  try {
+    res.json(await disksService.deleteAllOrphanDescriptions());
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @swagger
+ * /disks/descriptions/orphaned/{serial}:
+ *   delete:
+ *     summary: Delete a specific orphaned disk description
+ *     description: Remove a single description by serial number, only if the disk is not currently present (admin only)
+ *     tags: [Disks]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: serial
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Serial number of the orphaned disk
+ *     responses:
+ *       200:
+ *         description: Orphaned description deleted
+ *       403:
+ *         description: Admin permission required
+ *       404:
+ *         description: Description not found
+ *       500:
+ *         description: Server error
+ */
+router.delete('/descriptions/orphaned/:serial', checkRole(['admin']), async (req, res) => {
+  try {
+    const result = await disksService.deleteOrphanDescription(req.params.serial);
+    res.json(result);
+  } catch (error) {
+    if (error.message.includes('not found')) {
+      return res.status(404).json({ error: error.message });
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @swagger
+ * /disks/{device}/description:
+ *   put:
+ *     summary: Set or clear a disk description
+ *     description: |
+ *       Set a user-defined description for a disk. The description is stored persistently
+ *       keyed by the disk's serial number (survives device name changes). An empty or null
+ *       description removes the entry. The config file is only written on change (admin only).
+ *     tags: [Disks]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: device
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Device name (e.g., sda)
+ *         example: "sda"
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               description:
+ *                 type: string
+ *                 nullable: true
+ *                 description: Description text (empty or null clears the entry)
+ *                 example: "Media Pool Disk 3"
+ *     responses:
+ *       200:
+ *         description: Description set or cleared
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 serial:
+ *                   type: string
+ *                   example: "5PJJ26DF"
+ *                 description:
+ *                   type: string
+ *                   nullable: true
+ *                   example: "Media Pool Disk 3"
+ *       400:
+ *         description: Could not resolve serial for device
+ *       403:
+ *         description: Admin permission required
+ *       500:
+ *         description: Server error
+ */
+router.put('/:device/description', checkRole(['admin']), async (req, res) => {
+  try {
+    const result = await disksService.setDescription(req.params.device, req.body.description);
+    res.json(result);
+  } catch (error) {
+    if (error.message.includes('Could not resolve serial')) {
+      return res.status(400).json({ error: error.message });
+    }
     res.status(500).json({ error: error.message });
   }
 });
@@ -2113,4 +2303,4 @@ router.get('/zram/ramdisks', async (req, res) => {
   }
 });
 
-module.exports = router; 
+module.exports = router;
