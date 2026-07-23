@@ -2373,6 +2373,12 @@ class DisksService {
         });
       }
 
+      // Attach persistent descriptions (by serial) to each unassigned disk
+      await this.ensureDescriptionsLoaded();
+      for (const disk of unassignedDisks) {
+        disk.description = this.getDescription(disk.serial);
+      }
+
       return {
         unassignedDisks,
         unassignedCount: unassignedDisks.length,
