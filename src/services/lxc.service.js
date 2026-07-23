@@ -354,14 +354,65 @@ class LxcService {
           backing_storage: configData.isBtrfs ? 'btrfs' : 'directory',
           custom_icon: this.hasCustomIcon(parsed.name),
           config: `${lxcPath}/${parsed.name}/config`,
-          active_operation
+          active_operation,
+          invalid_config: false
         };
       }));
 
-      return enrichedContainers;
+      // Append containers that exist on disk (config present) but are not listed by lxc-ls
+      const knownNames = new Set(enrichedContainers.map(c => c.name));
+      const invalidContainers = await this._listInvalidContainers(lxcPath, knownNames);
+
+      return [...enrichedContainers, ...invalidContainers];
     } catch (error) {
       throw new Error(`Failed to list LXC containers: ${error.message}`);
     }
+  }
+
+  /**
+   * Find broken containers: directories in the LXC path that contain a config file
+   * but are not returned by lxc-ls (e.g. unparsable config). Returns stub objects
+   * with the name derived from the directory and all other fields null.
+   * @param {string} lxcPath - LXC directory path
+   * @param {Set<string>} knownNames - Names of containers already listed by lxc-ls
+   * @returns {Promise<Array>} Array of invalid container stub objects
+   * @private
+   */
+  async _listInvalidContainers(lxcPath, knownNames) {
+    let entries;
+    try {
+      entries = await fsPromises.readdir(lxcPath, { withFileTypes: true });
+    } catch (error) {
+      return [];
+    }
+
+    const candidates = entries.filter(e => e.isDirectory() && !knownNames.has(e.name));
+    const results = await Promise.all(candidates.map(async (dir) => {
+      const hasConfig = await fsPromises.access(`${lxcPath}/${dir.name}/config`)
+        .then(() => true)
+        .catch(() => false);
+      if (!hasConfig) return null;
+
+      return {
+        name: dir.name,
+        state: null,
+        autostart: null,
+        ipv4: null,
+        ipv6: null,
+        unprivileged: null,
+        distribution: "N/A",
+        architecture: "N/A",
+        description: null,
+        webui: null,
+        backing_storage: null,
+        custom_icon: null,
+        config: `${lxcPath}/${dir.name}/config`,
+        active_operation: null,
+        invalid_config: true
+      };
+    }));
+
+    return results.filter(Boolean);
   }
 
   /**

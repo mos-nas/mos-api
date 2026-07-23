@@ -58,6 +58,9 @@ const { checkRole } = require('../middleware/auth.middleware');
  *         custom_icon:
  *           type: boolean
  *           description: Whether a custom icon exists for this container
+ *         invalid_config:
+ *           type: boolean
+ *           description: True for broken containers found on disk (config present but not listed by LXC). For these entries only name is set, all other fields are null.
  *     ContainerCreateRequest:
  *       type: object
  *       required:
