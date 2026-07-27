@@ -325,9 +325,32 @@ const { checkRole } = require('../middleware/auth.middleware');
  *                 example: [{"dhcp": true}]
  *               ipv6:
  *                 type: array
- *                 description: IPv6 configuration array (currently always empty)
+ *                 description: IPv6 configuration array (max. one entry, empty array disables IPv6)
  *                 items:
  *                   type: object
+ *                   properties:
+ *                     dhcp:
+ *                       type: boolean
+ *                       description: Enable DHCPv6 for this IPv6 config
+ *                       example: false
+ *                     address:
+ *                       type: string
+ *                       description: Static IPv6 address, with or without prefix length (required when dhcp=false)
+ *                       example: "fd00::1/64"
+ *                     cidr:
+ *                       type: integer
+ *                       description: Prefix length 0-128, applied when address carries none (default 64)
+ *                       example: 64
+ *                     gateway:
+ *                       type: string
+ *                       description: IPv6 gateway (optional for static, disables router advertisements when set)
+ *                       example: "fd00::ffff"
+ *                     dns:
+ *                       type: array
+ *                       description: IPv6 DNS servers (optional for static)
+ *                       items:
+ *                         type: string
+ *                       example: ["fd00::1"]
  *                 example: []
  *               vlans:
  *                 type: array
@@ -356,9 +379,19 @@ const { checkRole } = require('../middleware/auth.middleware');
  *                             example: "192.168.100.254"
  *                     ipv6:
  *                       type: array
- *                       description: IPv6 configuration for this VLAN
+ *                       description: IPv6 configuration for this VLAN (max. one entry)
  *                       items:
  *                         type: object
+ *                         properties:
+ *                           dhcp:
+ *                             type: boolean
+ *                             example: false
+ *                           address:
+ *                             type: string
+ *                             example: "fd00:100::1/64"
+ *                           gateway:
+ *                             type: string
+ *                             example: "fd00:100::ffff"
  *                     mtu:
  *                       type: integer
  *                       nullable: true
@@ -1638,16 +1671,26 @@ router.post('/settings/network/revert', async (req, res) => {
  *                       example: "192.168.100.254"
  *               ipv6:
  *                 type: array
- *                 description: IPv6 configuration
+ *                 description: IPv6 configuration (max. one entry, empty array disables IPv6)
  *                 items:
  *                   type: object
  *                   properties:
+ *                     dhcp:
+ *                       type: boolean
+ *                       description: Enable DHCPv6 for this VLAN
+ *                       example: false
  *                     address:
  *                       type: string
- *                       example: "fd00::1"
- *                     prefix:
+ *                       description: Static IPv6 address, with or without prefix length (required when dhcp=false)
+ *                       example: "fd00::1/64"
+ *                     cidr:
  *                       type: integer
+ *                       description: Prefix length 0-128, applied when address carries none (default 64)
  *                       example: 64
+ *                     gateway:
+ *                       type: string
+ *                       description: IPv6 gateway (optional for static)
+ *                       example: "fd00::ffff"
  *               mtu:
  *                 type: integer
  *                 nullable: true

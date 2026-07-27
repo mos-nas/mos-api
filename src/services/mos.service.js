@@ -2381,8 +2381,8 @@ class MosService {
 
   /**
    * Migrates legacy network interface settings to new format:
-   * - Adds 'mac', 'mtu', 'hw_addr', 'status' fields if missing
-   * - Adds 'mtu' to VLAN entries if missing
+   * - Adds 'mac', 'mtu', 'hw_addr', 'status', 'ipv6' fields if missing
+   * - Adds 'mtu' and 'ipv6' to VLAN entries if missing
    * @param {Object} settings - Network settings object
    * @returns {Object} Migrated settings
    * @private
@@ -2398,6 +2398,7 @@ class MosService {
       if (iface.mtu === undefined) iface.mtu = null;
       if (iface.hw_addr === undefined) iface.hw_addr = null;
       if (iface.status === undefined) iface.status = 'enabled';
+      if (!Array.isArray(iface.ipv6)) iface.ipv6 = [];
       if (!Array.isArray(iface.vlans)) iface.vlans = [];
       if (iface.type === 'bridge') {
         if (iface.vlan_filtering === undefined) iface.vlan_filtering = false;
@@ -2407,6 +2408,7 @@ class MosService {
       // Migrate VLAN entries
       for (const vlan of iface.vlans) {
         if (vlan.mtu === undefined) vlan.mtu = null;
+        if (!Array.isArray(vlan.ipv6)) vlan.ipv6 = [];
       }
     }
 
@@ -2437,6 +2439,7 @@ class MosService {
    * Strips CIDR notation from IPv4 addresses and exposes it as a separate field.
    * E.g., "192.168.0.5/24" → { address: "192.168.0.5", cidr: 24, ... }
    * If no CIDR is present in the address, defaults cidr to 24.
+   * A malformed CIDR also falls back to 24 — reading must never fail on stored data.
    * @param {Array} ipv4Array - Array of IPv4 config objects
    * @returns {Array} Transformed array with cidr field
    * @private
@@ -2449,7 +2452,11 @@ class MosService {
       if (result.address.includes('/')) {
         const [ip, cidrStr] = result.address.split('/');
         result.address = ip;
-        result.cidr = this._validateCidr(cidrStr);
+        try {
+          result.cidr = this._validateCidr(cidrStr);
+        } catch {
+          result.cidr = 24;
+        }
       } else {
         result.cidr = 24;
       }
@@ -2476,6 +2483,80 @@ class MosService {
         const cidr = result.cidr !== undefined && result.cidr !== null
           ? this._validateCidr(result.cidr)
           : 24;
+        result.address = `${result.address}/${cidr}`;
+      }
+      delete result.cidr;
+      return result;
+    });
+  }
+
+  /**
+   * Validates a CIDR value for IPv6 (must be integer 0–128).
+   * Strips leading '/' if present (e.g., "/64" → 64).
+   * @param {*} cidr - CIDR value to validate
+   * @returns {number} Validated CIDR as integer
+   * @throws {Error} If CIDR is not a valid number between 0 and 128
+   * @private
+   */
+  _validateCidrV6(cidr) {
+    let value = cidr;
+    if (typeof value === 'string') {
+      value = value.replace(/^\//, '');
+    }
+    const parsed = parseInt(value, 10);
+    if (isNaN(parsed) || parsed < 0 || parsed > 128) {
+      throw new Error(`Invalid IPv6 CIDR value '${cidr}': must be a number between 0 and 128`);
+    }
+    return parsed;
+  }
+
+  /**
+   * Strips CIDR notation from IPv6 addresses and exposes it as a separate field.
+   * E.g., "fd00::167/64" → { address: "fd00::167", cidr: 64, ... }
+   * If no CIDR is present in the address, defaults cidr to 64.
+   * A malformed CIDR also falls back to 64 — reading must never fail on stored data.
+   * @param {Array} ipv6Array - Array of IPv6 config objects
+   * @returns {Array} Transformed array with cidr field
+   * @private
+   */
+  _stripCidrFromIpv6(ipv6Array) {
+    if (!Array.isArray(ipv6Array)) return ipv6Array;
+    return ipv6Array.map(entry => {
+      if (!entry.address) return entry;
+      const result = { ...entry };
+      if (result.address.includes('/')) {
+        const idx = result.address.lastIndexOf('/');
+        try {
+          result.cidr = this._validateCidrV6(result.address.slice(idx + 1));
+        } catch {
+          result.cidr = 64;
+        }
+        result.address = result.address.slice(0, idx);
+      } else {
+        result.cidr = 64;
+      }
+      return result;
+    });
+  }
+
+  /**
+   * Appends CIDR notation to IPv6 addresses before saving to file.
+   * Uses the provided cidr field, or defaults to /64 if not specified.
+   * E.g., { address: "fd00::167", cidr: 64 } → { address: "fd00::167/64", ... }
+   * The cidr field is removed from the object after merging.
+   * @param {Array} ipv6Array - Array of IPv6 config objects
+   * @returns {Array} Transformed array with CIDR in address
+   * @private
+   */
+  _appendCidrToIpv6(ipv6Array) {
+    if (!Array.isArray(ipv6Array)) return ipv6Array;
+    return ipv6Array.map(entry => {
+      if (!entry.address) return entry;
+      const result = { ...entry };
+      if (!result.address.includes('/')) {
+        const cidr = result.cidr !== undefined && result.cidr !== null
+          ? this._validateCidrV6(result.cidr)
+          : 64;
         result.address = `${result.address}/${cidr}`;
       }
       delete result.cidr;
@@ -2556,14 +2637,18 @@ class MosService {
       const enriched = interfaces.map(iface => {
         const result = { ...iface };
 
-        // Strip CIDR from IPv4 addresses and expose as separate field
+        // Strip CIDR from IP addresses and expose as separate field
         if (result.ipv4) {
           result.ipv4 = this._stripCidrFromIpv4(result.ipv4);
+        }
+        if (result.ipv6) {
+          result.ipv6 = this._stripCidrFromIpv6(result.ipv6);
         }
         if (Array.isArray(result.vlans)) {
           result.vlans = result.vlans.map(vlan => ({
             ...vlan,
-            ipv4: this._stripCidrFromIpv4(vlan.ipv4)
+            ipv4: this._stripCidrFromIpv4(vlan.ipv4),
+            ipv6: this._stripCidrFromIpv6(vlan.ipv6)
           }));
         }
 
@@ -2971,7 +3056,7 @@ class MosService {
             mode: null,
             interfaces: [bridgedIface.name],
             ipv4: bridgedIface.ipv4 && bridgedIface.ipv4.length > 0 ? bridgedIface.ipv4 : [{ dhcp: true }],
-            ipv6: [],
+            ipv6: bridgedIface.ipv6 && bridgedIface.ipv6.length > 0 ? bridgedIface.ipv6 : [],
             vlans: [],
             mtu: bridgedIface.mtu || null,
             hw_addr: null,
@@ -3004,6 +3089,9 @@ class MosService {
             // If this interface has no IP config, transfer from bridge
             if ((!iface.ipv4 || iface.ipv4.length === 0) && orphanBr.ipv4 && orphanBr.ipv4.length > 0) {
               iface.ipv4 = orphanBr.ipv4;
+            }
+            if ((!iface.ipv6 || iface.ipv6.length === 0) && orphanBr.ipv6 && orphanBr.ipv6.length > 0) {
+              iface.ipv6 = orphanBr.ipv6;
             }
             // Remove orphan bridge
             current.interfaces = current.interfaces.filter(i => i.name !== orphanBr.name);
@@ -3149,6 +3237,13 @@ class MosService {
               }
             }
           }
+          if (iface.ipv6 && Array.isArray(iface.ipv6)) {
+            for (const ipv6Config of iface.ipv6) {
+              if (ipv6Config.dhcp === false && !ipv6Config.address) {
+                throw new Error(`Interface ${iface.name}: IPv6 address is required when dhcp=false`);
+              }
+            }
+          }
         }
 
         // VLAN MTU validation
@@ -3189,14 +3284,20 @@ class MosService {
         if (iface.status === undefined) iface.status = 'enabled';
         if (!Array.isArray(iface.vlans)) iface.vlans = [];
 
-        // Append CIDR to IPv4 addresses for file storage
+        // Append CIDR to IP addresses for file storage
         if (iface.ipv4 && Array.isArray(iface.ipv4)) {
           iface.ipv4 = this._appendCidrToIpv4(iface.ipv4);
+        }
+        if (iface.ipv6 && Array.isArray(iface.ipv6)) {
+          iface.ipv6 = this._appendCidrToIpv6(iface.ipv6);
         }
         if (Array.isArray(iface.vlans)) {
           for (const vlan of iface.vlans) {
             if (vlan.ipv4 && Array.isArray(vlan.ipv4)) {
               vlan.ipv4 = this._appendCidrToIpv4(vlan.ipv4);
+            }
+            if (vlan.ipv6 && Array.isArray(vlan.ipv6)) {
+              vlan.ipv6 = this._appendCidrToIpv6(vlan.ipv6);
             }
           }
         }
@@ -3318,8 +3419,16 @@ class MosService {
         }
       }
 
-      // Append CIDR to IPv4 addresses for file storage
+      // Validate IPv6 configuration
+      for (const ipv6Config of newVlan.ipv6) {
+        if (ipv6Config.dhcp === false && !ipv6Config.address) {
+          throw new Error(`VLAN ${vlanId}: IPv6 address is required when dhcp=false`);
+        }
+      }
+
+      // Append CIDR to IP addresses for file storage
       newVlan.ipv4 = this._appendCidrToIpv4(newVlan.ipv4);
+      newVlan.ipv6 = this._appendCidrToIpv6(newVlan.ipv6);
 
       // Add VLAN to interface
       iface.vlans.push(newVlan);
