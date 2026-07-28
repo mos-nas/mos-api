@@ -17,9 +17,9 @@ class UserService {
     this.users = [];
     this.lastLoad = 0;
     this.cacheTimeout = 5 * 60 * 1000; // 5 minutes cache
-    // Admin tokens caching
+    // Admin tokens: loaded from disk once, only rewritten when tokens change
     this.adminTokens = [];
-    this.adminTokensLastLoad = 0;
+    this.adminTokensLoaded = false;
     this.systemConfigPath = '/boot/config/system';
     this.mfaPendingSetups = new Map();
     this.mfaBlacklistedTokens = new Set();
@@ -82,31 +82,28 @@ class UserService {
   }
 
   async loadAdminTokens() {
-    const now = Date.now();
-    // Only reload if cache is expired
-    if (now - this.adminTokensLastLoad > this.cacheTimeout) {
-      try {
-        await this.ensureAdminTokenFile();
-        const data = await fs.readFile(config.adminTokensFilePath, 'utf8');
-
-        try {
-          this.adminTokens = data.trim() ? JSON.parse(data) : [];
-          // Ensure tokens is always an array
-          if (!Array.isArray(this.adminTokens)) {
-            this.adminTokens = [];
-          }
-        } catch (parseError) {
-          console.error('Error parsing admin tokens file:', parseError);
-          this.adminTokens = [];
-        }
-
-        this.adminTokensLastLoad = now;
-      } catch (error) {
-        console.error('Error loading admin tokens:', error);
-        this.adminTokens = [];
-        this.adminTokensLastLoad = now;
-      }
+    if (this.adminTokensLoaded) {
+      return this.adminTokens;
     }
+
+    try {
+      await this.ensureAdminTokenFile();
+      const data = await fs.readFile(config.adminTokensFilePath, 'utf8');
+
+      try {
+        const parsed = data.trim() ? JSON.parse(data) : [];
+        this.adminTokens = Array.isArray(parsed) ? parsed : [];
+      } catch (parseError) {
+        // Keep last known good cache instead of wiping on a bad read
+        console.error('Error parsing admin tokens file:', parseError);
+      }
+
+      this.adminTokensLoaded = true;
+    } catch (error) {
+      // Leave unloaded so the next call retries instead of caching empty
+      console.error('Error loading admin tokens:', error);
+    }
+
     return this.adminTokens;
   }
 
@@ -125,7 +122,7 @@ class UserService {
     try {
       await fs.writeFile(config.adminTokensFilePath, JSON.stringify(tokens, null, 2), { mode: 0o600 });
       this.adminTokens = tokens;
-      this.adminTokensLastLoad = Date.now();
+      this.adminTokensLoaded = true;
     } catch (error) {
       console.error('Error saving admin tokens:', error);
       throw new Error('Error saving admin token data');
@@ -720,7 +717,6 @@ class UserService {
       token,
       permissions: normalizedPermissions,
       createdAt: new Date().toISOString(),
-      lastUsed: null,
       isActive: true
     };
 
@@ -751,23 +747,20 @@ class UserService {
    * @returns {Promise<Object|null>} Token data if valid, null if invalid
    */
   async validateAdminToken(token) {
+    // Read-only: runs on every request, must never write to disk
     const tokens = await this.loadAdminTokens();
-    const tokenIndex = tokens.findIndex(t => t.token === token && t.isActive);
+    const found = tokens.find(t => t.token === token && t.isActive);
 
-    if (tokenIndex === -1) {
+    if (!found) {
       return null;
     }
 
-    // Update last used timestamp
-    tokens[tokenIndex].lastUsed = new Date().toISOString();
-    await this.saveAdminTokens(tokens);
-
     return {
-      id: tokens[tokenIndex].id,
-      name: tokens[tokenIndex].name,
+      id: found.id,
+      name: found.name,
       role: 'admin',
       isAdminToken: true,
-      permissions: tokens[tokenIndex].permissions || null
+      permissions: found.permissions || null
     };
   }
 

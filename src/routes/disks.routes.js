@@ -162,6 +162,11 @@ const { checkRole, authenticateToken } = require('../middleware/auth.middleware'
  *           type: object
  *           nullable: true
  *           description: Performance metrics if requested
+ *         temperature:
+ *           type: number
+ *           nullable: true
+ *           description: Current temperature in Celsius (only with performance=true, null if disk is in standby)
+ *           example: 35
  *         standbySkipped:
  *           type: boolean
  *           description: Whether disk was skipped due to standby
@@ -478,7 +483,7 @@ const { checkRole, authenticateToken } = require('../middleware/auth.middleware'
  *           type: string
  *           enum: [true, false]
  *           default: "false"
- *         description: Include performance metrics (may wake sleeping disks)
+ *         description: Include performance metrics and live temperature (standby disks are not woken; their temperature is null)
  *         example: "false"
  *       - in: query
  *         name: skipStandby
@@ -531,6 +536,20 @@ router.get('/', authenticateToken, async (req, res) => {
       disk.temperatureStatus = disk.serial ? smartService.getDiskTemperatureStatus(disk.serial) : null;
       disk.description = disk.serial ? disksService.getDescription(disk.serial) : null;
     }
+
+    // Inject live temperature only when metrics are requested, and never wake
+    // standby disks: query active disks only, leave the rest null.
+    if (options.includePerformance) {
+      await Promise.all(disks.map(async disk => {
+        if (disk.powerStatus === 'active' && disk.device) {
+          const tempData = await disksService.getDiskTemperature(disk.device);
+          disk.temperature = tempData?.temperature || null;
+        } else {
+          disk.temperature = null;
+        }
+      }));
+    }
+
     res.json(disks);
   } catch (error) {
     res.status(500).json({ error: error.message });

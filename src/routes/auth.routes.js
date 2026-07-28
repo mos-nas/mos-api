@@ -143,10 +143,6 @@ const { loginRateLimiter, resetLoginAttempts } = require('../middleware/login-ra
  *           type: string
  *           format: date-time
  *           description: Creation timestamp
- *         lastUsed:
- *           type: string
- *           format: date-time
- *           description: Last usage timestamp
  *         isActive:
  *           type: boolean
  *           description: Token active status
