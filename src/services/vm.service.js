@@ -1704,16 +1704,9 @@ class VmService {
             }
 
             if (!diskExists) {
-              if (!disk.size) {
-                throw new Error(`Disk ${i + 1} (${disk.source}): File does not exist and no size specified for creation`);
-              }
-              // Validate that size has a unit (G, GB, GiB, M, MB, MiB, T, TB, TiB)
-              const sizeStr = String(disk.size).trim();
-              if (/^\d+(\.\d+)?$/.test(sizeStr)) {
-                throw new Error(`Disk ${i + 1} (${disk.source}): Size "${disk.size}" must include a unit (e.g., 30G, 50GB, 100GiB)`);
-              }
-              // Create the disk
-              await this.createDisk(disk.source, disk.size, disk.format || 'qcow2');
+              // Normalize size: bare number -> GiB, missing/invalid -> default
+              const size = this._normalizeDiskSize(disk.size);
+              await this.createDisk(disk.source, size, disk.format || 'qcow2');
             }
           }
         }
@@ -2141,6 +2134,27 @@ class VmService {
       // Get current config
       const currentConfig = await this.getVmConfig(vmName);
 
+      // Auto-create newly added disks whose source file doesn't exist yet
+      if (updates.disks && Array.isArray(updates.disks)) {
+        for (const disk of updates.disks) {
+          if (!disk.source) continue;
+
+          let diskExists = false;
+          try {
+            await fs.access(disk.source);
+            diskExists = true;
+          } catch (e) {
+            // Disk doesn't exist
+          }
+
+          if (!diskExists) {
+            // Normalize size: bare number -> GiB, missing/invalid -> default
+            const size = this._normalizeDiskSize(disk.size);
+            await this.createDisk(disk.source, size, disk.format || 'qcow2');
+          }
+        }
+      }
+
       // Resize file-based disks if size changed (grow only, block devices skipped)
       if (updates.disks) {
         await this._resizeDisksIfNeeded(currentConfig.disks, updates.disks);
@@ -2512,8 +2526,8 @@ class VmService {
       // Skip block devices (check current disk type too)
       if (currentDisk.diskType === 'block') continue;
 
-      // Parse new size to bytes for comparison
-      const newSizeBytes = this._parseSizeToBytes(newDisk.size);
+      // Normalize first so a bare number ("2") means 2G, consistent with disk creation
+      const newSizeBytes = this._parseSizeToBytes(this._normalizeDiskSize(newDisk.size));
       const currentSizeBytes = currentDisk.size; // already in bytes from getVmConfig
 
       if (newSizeBytes === currentSizeBytes) continue;
@@ -2531,6 +2545,33 @@ class VmService {
         throw new Error(`Failed to resize disk "${newDisk.source}": ${stderr}`);
       }
     }
+  }
+
+  /**
+   * Normalize a disk size into a qemu-img compatible size string.
+   * Bare numbers are treated as GiB ("2" -> "2G"); invalid/empty values fall back to the default.
+   * @param {string|number} size - Requested size
+   * @param {string} defaultSize - Fallback when size is missing or unparseable
+   * @returns {string} Size string with a unit (e.g. "2G")
+   * @private
+   */
+  _normalizeDiskSize(size, defaultSize = '4G') {
+    if (size === undefined || size === null) return defaultSize;
+
+    const sizeStr = String(size).trim();
+    if (sizeStr === '') return defaultSize;
+
+    // Bare number (no unit) -> assume GiB
+    if (/^\d+(\.\d+)?$/.test(sizeStr)) {
+      return `${sizeStr}G`;
+    }
+
+    // Number with a valid unit -> normalize spacing
+    if (/^\d+(\.\d+)?\s*(M|MB|MIB|G|GB|GIB|T|TB|TIB)$/i.test(sizeStr)) {
+      return sizeStr.replace(/\s+/g, '');
+    }
+
+    return defaultSize;
   }
 
   /**
