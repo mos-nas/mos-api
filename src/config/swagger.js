@@ -122,6 +122,14 @@ const options = {
         description: 'Terminal WebSocket management and documentation'
       },
       {
+        name: 'NUT',
+        description: 'Network UPS Tools configuration and status'
+      },
+      {
+        name: 'NUT WebSocket',
+        description: 'Real-time UPS status monitoring via WebSocket'
+      },
+      {
         name: 'Notifications',
         description: 'Notifications Management'
       },

@@ -50,6 +50,7 @@ const dockerComposeRoutes = require('./routes/dockercompose.routes');
 const lxcRoutes = require('./routes/lxc.routes');
 const vmRoutes = require('./routes/vm.routes');
 const mosRoutes = require('./routes/mos.routes');
+const nutRoutes = require('./routes/nut.routes');
 const sharesRoutes = require('./routes/shares.routes');
 const remotesRoutes = require('./routes/remotes.routes');
 const iscsiRoutes = require('./routes/iscsi.routes');
@@ -70,6 +71,7 @@ const dockerWebSocketRoutes = require('./routes/websocket/docker.websocket.route
 const disksWebSocketRoutes = require('./routes/websocket/disks.websocket.routes');
 const vmWebSocketRoutes = require('./routes/websocket/vm.websocket.routes');
 const lxcWebSocketRoutes = require('./routes/websocket/lxc.websocket.routes');
+const nutWebSocketRoutes = require('./routes/websocket/nut.websocket.routes');
 const fileOperationsWebSocketRoutes = require('./routes/websocket/fileoperations.websocket.routes');
 
 // Middleware
@@ -167,6 +169,7 @@ async function startServer() {
   app.use('/api/v1/lxc', authenticateToken, lxcRoutes);
   app.use('/api/v1/vm', authenticateToken, vmRoutes);
   app.use('/api/v1/mos', authenticateToken, mosRoutes);
+  app.use('/api/v1/nut', authenticateToken, nutRoutes);
   app.use('/api/v1/mos/diag', authenticateToken, diagnosticsRoutes);
   app.use('/api/v1/mos/hub', authenticateToken, hubRoutes);
   app.use('/api/v1/llm', authenticateToken, llmRoutes);
@@ -186,6 +189,7 @@ async function startServer() {
   app.use('/api/v1/disks', disksWebSocketRoutes);
   app.use('/api/v1/vm', vmWebSocketRoutes);
   app.use('/api/v1/lxc', lxcWebSocketRoutes);
+  app.use('/api/v1/nut', nutWebSocketRoutes);
   app.use('/api/v1/mos', fileOperationsWebSocketRoutes);
 
   // Error Handling
@@ -308,6 +312,7 @@ async function startServer() {
   const DisksWebSocketManager = require('./websockets/disks.websocket');
   const VmWebSocketManager = require('./websockets/vm.websocket');
   const LxcWebSocketManager = require('./websockets/lxc.websocket');
+  const NutWebSocketManager = require('./websockets/nut.websocket');
   const FileOperationsWebSocketManager = require('./websockets/fileoperations.websocket');
 
   // Initialize event emitter for service communication
@@ -322,6 +327,7 @@ async function startServer() {
   const disksNamespace = io.of('/disks');
   const vmNamespace = io.of('/vm');
   const lxcNamespace = io.of('/lxc');
+  const nutNamespace = io.of('/nut');
   const fileOperationsNamespace = io.of('/fileoperations');
 
   // Initialize pool WebSocket manager with pools namespace
@@ -385,6 +391,10 @@ async function startServer() {
   const lxcService = require('./services/lxc.service');
   const lxcWebSocketManager = new LxcWebSocketManager(lxcNamespace, lxcService);
 
+  // Initialize NUT WebSocket manager with nut namespace
+  const nutService = require('./services/nut.service');
+  const nutWebSocketManager = new NutWebSocketManager(nutNamespace, nutService);
+
   // Initialize File Operations WebSocket manager with fileoperations namespace
   const fileOperationsService = require('./services/fileoperations.service');
   const fileOperationsWebSocketManager = new FileOperationsWebSocketManager(fileOperationsNamespace, fileOperationsService);
@@ -397,6 +407,7 @@ async function startServer() {
   app.locals.disksWebSocketManager = disksWebSocketManager;
   app.locals.vmWebSocketManager = vmWebSocketManager;
   app.locals.lxcWebSocketManager = lxcWebSocketManager;
+  app.locals.nutWebSocketManager = nutWebSocketManager;
   app.locals.fileOperationsWebSocketManager = fileOperationsWebSocketManager;
 
   // Setup namespace handlers
@@ -438,6 +449,12 @@ async function startServer() {
   lxcNamespace.on('connection', (socket) => {
     console.info(`LXC WebSocket client connected: ${socket.id}`);
     lxcWebSocketManager.handleConnection(socket);
+  });
+
+  // NUT namespace for UPS status monitoring
+  nutNamespace.on('connection', (socket) => {
+    console.info(`NUT WebSocket client connected: ${socket.id}`);
+    nutWebSocketManager.handleConnection(socket);
   });
 
   // File Operations namespace for copy/move progress monitoring

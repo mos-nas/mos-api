@@ -2300,7 +2300,6 @@ class MosService {
         samba_discovery: { enabled: false },
         nfs: { enabled: false },
         remote_mounting: { enabled: false },
-        nut: { enabled: false },
         iscsi_target: { enabled: false },
         iscsi_initiator: { enabled: false },
         tailscale: {
@@ -2737,6 +2736,13 @@ class MosService {
         }
       }
       if (checks.length) await Promise.all(checks);
+
+      // NUT enabled flag is owned by nut.service (nut.json)
+      try {
+        services.nut = { enabled: await require('./nut.service').isEnabled() };
+      } catch (_) {
+        services.nut = { enabled: false };
+      }
 
       return services;
     } catch (error) {
@@ -3596,16 +3602,12 @@ class MosService {
         current.services.nfs.enabled = services.nfs.enabled;
       }
 
-      // Handle nut service
+      // NUT enabled flag is owned by nut.service (nut.json); never persisted in network.json
       if (services.nut && typeof services.nut.enabled === 'boolean') {
-        if (!current.services) current.services = {};
-        if (!current.services.nut) current.services.nut = {};
-        if (current.services.nut.enabled !== services.nut.enabled) {
-          nutChanged = true;
-          nutValue = services.nut.enabled;
-        }
-        current.services.nut.enabled = services.nut.enabled;
+        nutChanged = true;
+        nutValue = services.nut.enabled;
       }
+      if (current.services && current.services.nut) delete current.services.nut;
 
       // Handle ssh service
       if (services.ssh && typeof services.ssh.enabled === 'boolean') {
@@ -3730,13 +3732,7 @@ class MosService {
         }
       }
       if (nutChanged) {
-        if (nutValue === false) {
-          await execPromise('/etc/init.d/nut-client stop');
-          await execPromise('/etc/init.d/nut-server stop');
-        } else if (nutValue === true) {
-          await execPromise('/etc/init.d/nut-client start');
-          await execPromise('/etc/init.d/nut-server start');
-        }
+        await require('./nut.service').setEnabled(nutValue);
       }
       if (sshChanged) {
         if (sshValue === false) {
