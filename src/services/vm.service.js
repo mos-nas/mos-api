@@ -1704,8 +1704,8 @@ class VmService {
             }
 
             if (!diskExists) {
-              // Normalize size: bare number -> GiB, missing/invalid -> default
-              const size = this._normalizeDiskSize(disk.size);
+              // Size in bytes (bare number = bytes, unit strings parsed); default when missing
+              const size = this._resolveDiskSizeBytes(disk.size);
               await this.createDisk(disk.source, size, disk.format || 'qcow2');
             }
           }
@@ -2148,8 +2148,8 @@ class VmService {
           }
 
           if (!diskExists) {
-            // Normalize size: bare number -> GiB, missing/invalid -> default
-            const size = this._normalizeDiskSize(disk.size);
+            // Size in bytes (bare number = bytes, unit strings parsed); default when missing
+            const size = this._resolveDiskSizeBytes(disk.size);
             await this.createDisk(disk.source, size, disk.format || 'qcow2');
           }
         }
@@ -2526,8 +2526,8 @@ class VmService {
       // Skip block devices (check current disk type too)
       if (currentDisk.diskType === 'block') continue;
 
-      // Normalize first so a bare number ("2") means 2G, consistent with disk creation
-      const newSizeBytes = this._parseSizeToBytes(this._normalizeDiskSize(newDisk.size));
+      // Bare number = bytes (matches getVmConfig output), unit strings ("2G") are parsed
+      const newSizeBytes = this._parseSizeToBytes(newDisk.size);
       const currentSizeBytes = currentDisk.size; // already in bytes from getVmConfig
 
       if (newSizeBytes === currentSizeBytes) continue;
@@ -2548,30 +2548,23 @@ class VmService {
   }
 
   /**
-   * Normalize a disk size into a qemu-img compatible size string.
-   * Bare numbers are treated as GiB ("2" -> "2G"); invalid/empty values fall back to the default.
-   * @param {string|number} size - Requested size
-   * @param {string} defaultSize - Fallback when size is missing or unparseable
-   * @returns {string} Size string with a unit (e.g. "2G")
+   * Resolve a requested disk size to bytes for qemu-img.
+   * Accepts unit strings ("2G", "500M") and plain byte values (matching what getVmConfig returns).
+   * Empty or unparseable values fall back to the default.
+   * @param {string|number} size - Requested size (bytes if no unit is given)
+   * @param {number} defaultBytes - Fallback when size is missing or invalid
+   * @returns {number} Size in bytes
    * @private
    */
-  _normalizeDiskSize(size, defaultSize = '4G') {
-    if (size === undefined || size === null) return defaultSize;
-
-    const sizeStr = String(size).trim();
-    if (sizeStr === '') return defaultSize;
-
-    // Bare number (no unit) -> assume GiB
-    if (/^\d+(\.\d+)?$/.test(sizeStr)) {
-      return `${sizeStr}G`;
+  _resolveDiskSizeBytes(size, defaultBytes = 4 * 1024 * 1024 * 1024) {
+    if (size === undefined || size === null || String(size).trim() === '') {
+      return defaultBytes;
     }
-
-    // Number with a valid unit -> normalize spacing
-    if (/^\d+(\.\d+)?\s*(M|MB|MIB|G|GB|GIB|T|TB|TIB)$/i.test(sizeStr)) {
-      return sizeStr.replace(/\s+/g, '');
+    try {
+      return this._parseSizeToBytes(size);
+    } catch (e) {
+      return defaultBytes;
     }
-
-    return defaultSize;
   }
 
   /**
