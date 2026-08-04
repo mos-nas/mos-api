@@ -335,7 +335,7 @@ const { checkRole } = require('../middleware/auth.middleware');
  *                       example: false
  *                     address:
  *                       type: string
- *                       description: Static IPv6 address, with or without prefix length (required when dhcp=false)
+ *                       description: Static IPv6 address, with or without prefix length (omit together with dhcp=false for SLAAC mode)
  *                       example: "fd00::1/64"
  *                     cidr:
  *                       type: integer
@@ -1147,7 +1147,7 @@ router.post('/settings/network/interfaces/reconcile', async (req, res) => {
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: Network interfaces retrieved successfully
+ *         description: Network interfaces retrieved successfully. IPv6 entries always carry dhcp, address, cidr, gateway, dns and a read-only runtime_address field with the address currently active on the interface (SLAAC, DHCPv6 lease or applied static; null if none obtained yet).
  *         content:
  *           application/json:
  *             schema:
@@ -1173,7 +1173,7 @@ router.post('/settings/network/interfaces/reconcile', async (req, res) => {
  *                   mode: null
  *                   interfaces: []
  *                   ipv4: [{"dhcp": true}]
- *                   ipv6: []
+ *                   ipv6: [{"dhcp": false, "address": null, "cidr": null, "gateway": null, "dns": [], "runtime_address": "2a02:8071:b8a:fa00:4e52:62ff:feb9:4434"}]
  *                   vlans: []
  *                   mtu: null
  *                   hw_addr: null
@@ -1681,7 +1681,7 @@ router.post('/settings/network/revert', async (req, res) => {
  *                       example: false
  *                     address:
  *                       type: string
- *                       description: Static IPv6 address, with or without prefix length (required when dhcp=false)
+ *                       description: Static IPv6 address, with or without prefix length (omit together with dhcp=false for SLAAC mode)
  *                       example: "fd00::1/64"
  *                     cidr:
  *                       type: integer

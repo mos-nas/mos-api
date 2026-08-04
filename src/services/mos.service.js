@@ -2550,8 +2550,13 @@ class MosService {
   _appendCidrToIpv6(ipv6Array) {
     if (!Array.isArray(ipv6Array)) return ipv6Array;
     return ipv6Array.map(entry => {
-      if (!entry.address) return entry;
       const result = { ...entry };
+      // Strip read-only runtime field (never persist to config)
+      delete result.runtime_address;
+      if (!result.address) {
+        delete result.cidr;
+        return result;
+      }
       if (!result.address.includes('/')) {
         const cidr = result.cidr !== undefined && result.cidr !== null
           ? this._validateCidrV6(result.cidr)
@@ -2602,6 +2607,52 @@ class MosService {
   }
 
   /**
+   * Reads the current global IPv6 addresses from the system, keyed by interface name.
+   * Temporary (privacy extension) addresses are skipped.
+   * @returns {Promise<Map<string, string>>} Map of interface name to IPv6 address
+   * @private
+   */
+  async _getIpv6SystemAddresses() {
+    const addresses = new Map();
+    try {
+      const { stdout } = await execPromise('ip -6 -json addr show scope global');
+      for (const link of JSON.parse(stdout)) {
+        for (const info of (link.addr_info || [])) {
+          if (info.temporary) continue;
+          if (!addresses.has(link.ifname)) {
+            addresses.set(link.ifname, info.local);
+          }
+        }
+      }
+    } catch { /* no IPv6 addresses available — no enrichment */ }
+    return addresses;
+  }
+
+  /**
+   * Normalizes an IPv6 entry to a stable shape and exposes the live address.
+   * runtime_address carries the address currently on the interface (SLAAC,
+   * DHCPv6 lease or applied static) — read-only runtime info, never persisted.
+   * @param {Array} ipv6Array - IPv6 config array
+   * @param {Map<string, string>} addrMap - Interface name to address map
+   * @param {string} ifname - Interface name to look up
+   * @returns {Array} IPv6 array with normalized first entry
+   * @private
+   */
+  _enrichIpv6Runtime(ipv6Array, addrMap, ifname) {
+    if (!Array.isArray(ipv6Array) || ipv6Array.length === 0) return ipv6Array;
+    const first = {
+      dhcp: false,
+      address: null,
+      cidr: null,
+      gateway: null,
+      dns: [],
+      ...ipv6Array[0],
+      runtime_address: addrMap.get(ifname) || null
+    };
+    return [first, ...ipv6Array.slice(1)];
+  }
+
+  /**
    * Reads the network interfaces from the network.json file and enriches them
    * with live hardware info (link_state, speed, driver) from the system.
    * Hardware info is NOT written to the config file.
@@ -2624,6 +2675,13 @@ class MosService {
         detected = await this.detectPhysicalInterfaces();
       } catch { /* ignore detection errors — return config without hw info */ }
 
+      // Live IPv6 addresses for runtime enrichment — skipped entirely when IPv6 is not configured
+      const ipv6Configured = interfaces.some(iface =>
+        (Array.isArray(iface.ipv6) && iface.ipv6.length > 0) ||
+        (Array.isArray(iface.vlans) && iface.vlans.some(vlan => Array.isArray(vlan.ipv6) && vlan.ipv6.length > 0))
+      );
+      const ipv6Addresses = ipv6Configured ? await this._getIpv6SystemAddresses() : new Map();
+
       // Build MAC → hardware info lookup
       const hwByMac = new Map();
       const hwByName = new Map();
@@ -2642,12 +2700,13 @@ class MosService {
         }
         if (result.ipv6) {
           result.ipv6 = this._stripCidrFromIpv6(result.ipv6);
+          result.ipv6 = this._enrichIpv6Runtime(result.ipv6, ipv6Addresses, result.name);
         }
         if (Array.isArray(result.vlans)) {
           result.vlans = result.vlans.map(vlan => ({
             ...vlan,
             ipv4: this._stripCidrFromIpv4(vlan.ipv4),
-            ipv6: this._stripCidrFromIpv6(vlan.ipv6)
+            ipv6: this._enrichIpv6Runtime(this._stripCidrFromIpv6(vlan.ipv6), ipv6Addresses, `${result.name}.${vlan.vlan_id}`)
           }));
         }
 
@@ -3243,13 +3302,7 @@ class MosService {
               }
             }
           }
-          if (iface.ipv6 && Array.isArray(iface.ipv6)) {
-            for (const ipv6Config of iface.ipv6) {
-              if (ipv6Config.dhcp === false && !ipv6Config.address) {
-                throw new Error(`Interface ${iface.name}: IPv6 address is required when dhcp=false`);
-              }
-            }
-          }
+          // IPv6 needs no address check: dhcp=false without address is valid (SLAAC mode)
         }
 
         // VLAN MTU validation
@@ -3425,12 +3478,7 @@ class MosService {
         }
       }
 
-      // Validate IPv6 configuration
-      for (const ipv6Config of newVlan.ipv6) {
-        if (ipv6Config.dhcp === false && !ipv6Config.address) {
-          throw new Error(`VLAN ${vlanId}: IPv6 address is required when dhcp=false`);
-        }
-      }
+      // IPv6 needs no address check: dhcp=false without address is valid (SLAAC mode)
 
       // Append CIDR to IP addresses for file storage
       newVlan.ipv4 = this._appendCidrToIpv4(newVlan.ipv4);
