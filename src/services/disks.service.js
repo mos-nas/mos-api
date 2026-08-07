@@ -1,4 +1,3 @@
-const si = require('systeminformation');
 const { exec, spawn } = require('child_process');
 const util = require('util');
 const execPromise = util.promisify(exec);
@@ -1866,6 +1865,24 @@ class DisksService {
   }
 
   /**
+   * Lists whole block devices (no partitions) via lsblk.
+   * Only sysfs/udev-backed columns are requested, so standby disks stay asleep.
+   * @returns {Promise<Array>} Devices with name, type, size, model, serial
+   */
+  async _getBlockDevices() {
+    const { stdout } = await execPromise('lsblk -J -b -d -o NAME,TYPE,SIZE,MODEL,SERIAL');
+    const data = JSON.parse(stdout);
+
+    return (data.blockdevices || []).map(dev => ({
+      name: dev.name,
+      type: dev.type,
+      size: Number(dev.size) || 0,
+      model: (dev.model || '').trim(),
+      serial: dev.serial || ''
+    }));
+  }
+
+  /**
    * Main method: List all disks
    * @param {Object} options - Options for disk listing
    * @param {Object} user - User object with byte_format preference
@@ -1875,7 +1892,7 @@ class DisksService {
 
     try {
       // Get all block devices
-      const blockDevices = await si.blockDevices();
+      const blockDevices = await this._getBlockDevices();
 
       // Filter to physical disks only
       const physicalDisks = blockDevices.filter(disk =>
