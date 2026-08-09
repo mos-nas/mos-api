@@ -12,6 +12,12 @@ const { sendNotification } = require('./plugins.service');
 // Timestamp-based ID-Generator
 const generateId = () => Date.now().toString();
 
+// df stats every mount point it does not exclude, which blocks for the full
+// NFS/SMB timeout when a remote server is gone
+const DF_EXCLUDE_REMOTE = ['nfs', 'nfs3', 'nfs4', 'cifs', 'smb3', 'smbfs',
+  'sshfs', 'fuse.sshfs', 'ceph', 'glusterfs', 'afs', '9p', 'davfs']
+  .map(t => `-x ${t}`).join(' ');
+
 class PoolsService {
   constructor(eventEmitter = null) {
     this.poolsFile = '/boot/config/pools.json';
@@ -5194,8 +5200,7 @@ class PoolsService {
    */
   async _getDfData() {
     try {
-      // Exclude remote filesystems (cifs/nfs) to avoid hanging on unavailable shares
-      const { stdout } = await execPromise('df -B1 -x cifs -x nfs');
+      const { stdout } = await execPromise(`timeout 10 df -B1 ${DF_EXCLUDE_REMOTE}`);
       const lines = stdout.trim().split('\n').slice(1); // Skip header
       const dfData = {};
 
@@ -5639,8 +5644,8 @@ class PoolsService {
    * @param {Object} pool - Pool object
    * @param {Object} user - User object with byte_format preference
    */
-  async _injectStorageInfoIntoDevices(pool, user = null) {
-    const dfData = await this._getDfData();
+  async _injectStorageInfoIntoDevices(pool, user = null, sharedDfData = null) {
+    const dfData = sharedDfData || await this._getDfData();
 
     // For non-encrypted BTRFS multi-device pools, get all physical devices from btrfs filesystem show
     let btrfsDevices = [];
@@ -5809,6 +5814,9 @@ class PoolsService {
         await this._writePools(pools);
       }
 
+      // One df run for all pools instead of one per pool
+      const dfData = await this._getDfData();
+
       // For each pool, update its mounted status and space info
       for (const pool of pools) {
         // Inject real device paths for API display
@@ -5846,7 +5854,7 @@ class PoolsService {
         }
 
         // Inject storage info first (needed before power status for context)
-        await this._injectStorageInfoIntoDevices(pool, user);
+        await this._injectStorageInfoIntoDevices(pool, user, dfData);
 
         // Run power status and disk info injection in parallel
         // Both are independent read-only operations, standby handling preserved
