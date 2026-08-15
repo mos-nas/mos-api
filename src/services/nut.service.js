@@ -225,7 +225,7 @@ class NutService {
   }
 
   /**
-   * Toggle the enabled flag and restart the services if it changed
+   * Toggle the enabled flag in nut.json (service control is handled by mos.service)
    * @param {boolean} enabled - Desired state
    * @returns {Promise<Object>} Updated model
    */
@@ -234,7 +234,6 @@ class NutService {
     if (current.enabled === enabled) return current;
     current.enabled = enabled;
     await this._writeModel(current);
-    await this._applyRestart();
     return current;
   }
 

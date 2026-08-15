@@ -3780,7 +3780,16 @@ class MosService {
         }
       }
       if (nutChanged) {
-        await require('./nut.service').setEnabled(nutValue);
+        if (nutValue === false) {
+          await execPromise('/etc/init.d/nut-client stop');
+          await execPromise('/etc/init.d/nut-server stop');
+          await require('./nut.service').setEnabled(false);
+          await execPromise('/etc/init.d/nut-server start');
+        } else if (nutValue === true) {
+          await require('./nut.service').setEnabled(true);
+          await execPromise('/etc/init.d/nut-server start');
+          await execPromise('/etc/init.d/nut-client start');
+        }
       }
       if (sshChanged) {
         if (sshValue === false) {
