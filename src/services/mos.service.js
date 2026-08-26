@@ -22,6 +22,7 @@ class MosService {
     this.sensorsExternalPath = '/var/mos/external-sensors.json';
     this.tokensPath = '/boot/config/system/tokens.json';
     this.notifyProvidersPath = '/boot/config/notify/providers';
+    this.rsyncConfigPath = '/boot/config/system/rsync/rsyncd.conf';
 
     // Sensors config cache
     this._sensorsConfigCache = null;
@@ -2317,7 +2318,8 @@ class MosService {
           update_check: false,
           netbird_service_params: ''
         },
-        dnsmasq: { enabled: false }
+        dnsmasq: { enabled: false },
+        rsync_daemon: { enabled: false }
       }
     };
   }
@@ -3600,6 +3602,7 @@ class MosService {
       let netbirdChanged = false, netbirdValue = null;
       let remoteMountingChanged = false, remoteMountingValue = null;
       let dnsmasqChanged = false, dnsmasqValue = null;
+      let rsyncDaemonChanged = false, rsyncDaemonValue = null;
 
       // Handle remote_mounting setting
       if (services.remote_mounting && typeof services.remote_mounting === 'object') {
@@ -3748,6 +3751,17 @@ class MosService {
         current.services.dnsmasq.enabled = services.dnsmasq.enabled;
       }
 
+      // Handle rsync_daemon service
+      if (services.rsync_daemon && typeof services.rsync_daemon.enabled === 'boolean') {
+        if (!current.services) current.services = {};
+        if (!current.services.rsync_daemon) current.services.rsync_daemon = {};
+        if (current.services.rsync_daemon.enabled !== services.rsync_daemon.enabled) {
+          rsyncDaemonChanged = true;
+          rsyncDaemonValue = services.rsync_daemon.enabled;
+        }
+        current.services.rsync_daemon.enabled = services.rsync_daemon.enabled;
+      }
+
       // Write updated settings
       await fs.writeFile('/boot/config/network.json', JSON.stringify(current, null, 2), 'utf8');
 
@@ -3835,11 +3849,68 @@ class MosService {
           await execPromise('/etc/init.d/dnsmasq start');
         }
       }
+      if (rsyncDaemonChanged) {
+        if (rsyncDaemonValue === false) {
+          await execPromise('/etc/init.d/rsync stop');
+        } else if (rsyncDaemonValue === true) {
+          await execPromise('/etc/init.d/rsync start');
+        }
+      }
 
       return current.services;
     } catch (error) {
       throw new Error(`Error updating network services: ${error.message}`);
     }
+  }
+
+  /**
+   * Reads the rsync daemon configuration.
+   * @returns {Promise<Object>} Result object with file content and metadata
+   */
+  async getRsyncConfig() {
+    return this.readFile(this.rsyncConfigPath);
+  }
+
+  /**
+   * Writes the rsync daemon configuration, then restarts the daemon if the
+   * content actually changed and the service is enabled.
+   * @param {string} content - New rsyncd.conf content
+   * @param {boolean} createBackup - Whether to keep a .backup copy of the previous config
+   * @returns {Promise<Object>} Result with backup path plus change/restart info
+   */
+  async updateRsyncConfig(content, createBackup = false) {
+    if (typeof content !== 'string') {
+      throw new Error('content must be a string');
+    }
+
+    let previous = null;
+    try {
+      previous = (await this.readFile(this.rsyncConfigPath)).content;
+    } catch (error) {
+      if (!error.message.includes('File does not exist')) throw error;
+    }
+
+    await fs.mkdir(path.dirname(this.rsyncConfigPath), { recursive: true });
+
+    // editFile only overwrites existing files, so seed it on the very first save
+    if (previous === null) {
+      await fs.writeFile(this.rsyncConfigPath, '', 'utf8');
+    }
+
+    const result = await this.editFile(this.rsyncConfigPath, content, createBackup);
+    const changed = previous !== content;
+
+    let restarted = false;
+    if (changed) {
+      const services = await this._getNetworkServicesStatus();
+      if (services.rsync_daemon?.enabled === true) {
+        await execPromise('/etc/init.d/rsync stop');
+        await execPromise('/etc/init.d/rsync start');
+        restarted = true;
+      }
+    }
+
+    return { ...result, path: this.rsyncConfigPath, changed, restarted };
   }
 
   /**
@@ -4984,14 +5055,25 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
   }
 
   /**
-   * Fast read of network services status without loading defaults
+   * Fast read of network services status: seeded from the defaults so services
+   * not yet written to network.json still report their initial state.
    * @returns {Promise<Object>} Network services with enabled status
    */
   async _getNetworkServicesStatus() {
+    const result = {};
+
+    const defaultServices = this._getDefaultNetworkSettings().services || {};
+    for (const [serviceName, serviceConfig] of Object.entries(defaultServices)) {
+      if (serviceConfig && typeof serviceConfig === 'object' && 'enabled' in serviceConfig) {
+        result[serviceName] = {
+          enabled: serviceConfig.enabled === true
+        };
+      }
+    }
+
     try {
       const data = await fs.readFile('/boot/config/network.json', 'utf8');
       const settings = JSON.parse(data);
-      const result = {};
 
       if (settings.services && typeof settings.services === 'object') {
         for (const [serviceName, serviceConfig] of Object.entries(settings.services)) {
@@ -5004,11 +5086,11 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
           }
         }
       }
-
-      return result;
     } catch (error) {
-      return {}; // File not found or error - return empty object
+      // File not found or unreadable - defaults only
     }
+
+    return result;
   }
 
   /**

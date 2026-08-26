@@ -1851,6 +1851,8 @@ router.delete('/settings/network/interfaces/:interfaceName/vlans/:vlanId', async
  *                 enabled: false
  *                 update_check: false
  *                 netbird_service_params: ""
+ *               rsync_daemon:
+ *                 enabled: false
  *       401:
  *         description: Not authenticated
  *         content:
@@ -1887,6 +1889,8 @@ router.delete('/settings/network/interfaces/:interfaceName/vlans/:vlanId', async
  *             nfs:
  *               enabled: true
  *             nut:
+ *               enabled: false
+ *             rsync_daemon:
  *               enabled: false
  *     responses:
  *       200:
@@ -1943,6 +1947,172 @@ router.post('/settings/network/services', async (req, res) => {
     }
     const updated = await mosService.updateNetworkServices(req.body);
     res.json(updated);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @swagger
+ * /mos/settings/network/services/rsync/config:
+ *   get:
+ *     summary: Get rsync daemon configuration
+ *     description: Read the rsyncd.conf stored in /boot/config/system/rsync/rsyncd.conf (admin only)
+ *     tags: [MOS]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Configuration retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 path:
+ *                   type: string
+ *                   example: "/boot/config/system/rsync/rsyncd.conf"
+ *                 content:
+ *                   type: string
+ *                   description: The rsyncd.conf content as a string
+ *                   example: "[data]\n  path = /mnt/pool/data\n  read only = no\n"
+ *                 size:
+ *                   type: integer
+ *                   description: Size of the file in bytes
+ *                   example: 512
+ *       404:
+ *         description: Configuration file does not exist yet
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: Not authenticated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       403:
+ *         description: Admin permission required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *   post:
+ *     summary: Update rsync daemon configuration
+ *     description: |
+ *       Writes the rsyncd.conf to /boot/config/system/rsync/rsyncd.conf, creating the
+ *       directory and the file if they do not exist yet. When the content actually changed
+ *       and the rsync_daemon service is enabled, the daemon is stopped and started again.
+ *     tags: [MOS]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - content
+ *             properties:
+ *               content:
+ *                 type: string
+ *                 description: New rsyncd.conf content
+ *                 example: "[data]\n  path = /mnt/pool/data\n  read only = no\n"
+ *               create_backup:
+ *                 type: boolean
+ *                 description: Whether to create a backup file with .backup extension
+ *                 example: false
+ *                 default: false
+ *     responses:
+ *       200:
+ *         description: Configuration updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "File edited successfully"
+ *                 path:
+ *                   type: string
+ *                   example: "/boot/config/system/rsync/rsyncd.conf"
+ *                 backupPath:
+ *                   type: string
+ *                   nullable: true
+ *                   example: null
+ *                 changed:
+ *                   type: boolean
+ *                   description: Whether the content differed from the stored config
+ *                   example: true
+ *                 restarted:
+ *                   type: boolean
+ *                   description: Whether the rsync daemon was restarted
+ *                   example: true
+ *       400:
+ *         description: Bad request - missing or invalid content
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: Not authenticated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       403:
+ *         description: Admin permission required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+
+// GET: Read rsync daemon configuration
+router.get('/settings/network/services/rsync/config', checkRole(['admin']), async (req, res) => {
+  try {
+    const result = await mosService.getRsyncConfig();
+    res.json(result);
+  } catch (error) {
+    if (error.message.includes('File does not exist')) {
+      return res.status(404).json({ error: error.message });
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST: Update rsync daemon configuration
+router.post('/settings/network/services/rsync/config', checkRole(['admin']), async (req, res) => {
+  try {
+    const { content, create_backup = false } = req.body || {};
+
+    if (typeof content !== 'string') {
+      return res.status(400).json({ error: 'content parameter is required and must be a string' });
+    }
+
+    const result = await mosService.updateRsyncConfig(content, create_backup);
+    res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

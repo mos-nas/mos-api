@@ -77,6 +77,9 @@ const collectors = [
   { type: 'file', source: '/var/log/syslog', target: 'logs/syslog.txt' },
   { type: 'file', source: '/var/log/samba/samba.log', target: 'logs/samba.txt' },
   { type: 'file', source: '/etc/exports', target: 'nfs/exports.txt' },
+  { type: 'file', source: '/var/lib/docker/mos/containers', target: 'docker/containers' },
+  { type: 'file', source: '/var/lib/docker/mos/compose-containers', target: 'docker/compose-containers' },
+  { type: 'file', source: '/var/lib/docker/mos/groups', target: 'docker/groups' },
 
   // Directories
   { type: 'directory', source: '/var/log/libvirt', target: 'logs/libvirt' },
@@ -101,6 +104,7 @@ const collectors = [
   { type: 'command', command: `lspci -vv 2>/dev/null | awk -b '/ASPM/{print $0}' RS= | grep -P '(^[a-z0-9:.]+|ASPM |Disabled;|Enabled;)'`, target: 'system/aspm.txt' },
   { type: 'command', command: 'lsusb -vt 2>/dev/null', target: 'system/lsusb.txt' },
   { type: 'command', command: 'ip -br addr | grep -vE "^(veth|docker0|virbr|tunl0|br-[a-f0-9]{12}|lxcbr)"', target: 'system/interfaces.txt' },
+  { type: 'command', command: 'docker network ls', target: 'docker/networks.txt' },
 ];
 
 class DiagnosticsService {

@@ -298,4 +298,176 @@ router.get('/status', async (req, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /nut/scripts/{event}:
+ *   get:
+ *     summary: Get the script for a NUT event
+ *     description: Reads the event script from /boot/config/system/nut/{event}.sh (admin only).
+ *     tags: [NUT]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: event
+ *         required: true
+ *         schema:
+ *           type: string
+ *           enum: [ONLINE, ONBATT, SHUTDOWN, LOWBATT, FSD, COMMBAD, NOCOMM, NOPARENT, REPLBATT]
+ *         description: NUT NOTIFYTYPE, case insensitive
+ *         example: ONBATT
+ *     responses:
+ *       200:
+ *         description: Script content
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean, example: true }
+ *                 event: { type: string, example: ONBATT }
+ *                 path: { type: string, example: "/boot/config/system/nut/onbatt.sh" }
+ *                 content: { type: string, example: "#!/bin/sh\necho on battery\n" }
+ *                 size: { type: integer, example: 27 }
+ *       400:
+ *         description: Unknown event
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       404:
+ *         description: No script stored for this event yet
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: Not authenticated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       403:
+ *         description: Admin permission required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *   post:
+ *     summary: Update the script for a NUT event
+ *     description: |
+ *       Writes the event script to /boot/config/system/nut/{event}.sh, creating the directory
+ *       and the file if they do not exist yet. NUT is not restarted: upsmon runs the script
+ *       straight from the boot stick when the event fires, so changes take effect immediately.
+ *     tags: [NUT]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: event
+ *         required: true
+ *         schema:
+ *           type: string
+ *           enum: [ONLINE, ONBATT, SHUTDOWN, LOWBATT, FSD, COMMBAD, NOCOMM, NOPARENT, REPLBATT]
+ *         description: NUT NOTIFYTYPE, case insensitive
+ *         example: ONBATT
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - content
+ *             properties:
+ *               content:
+ *                 type: string
+ *                 description: New script content
+ *                 example: "#!/bin/sh\necho on battery\n"
+ *               create_backup:
+ *                 type: boolean
+ *                 description: Whether to create a backup file with .backup extension
+ *                 example: false
+ *                 default: false
+ *     responses:
+ *       200:
+ *         description: Script updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success: { type: boolean, example: true }
+ *                 message: { type: string, example: "File edited successfully" }
+ *                 event: { type: string, example: ONBATT }
+ *                 path: { type: string, example: "/boot/config/system/nut/onbatt.sh" }
+ *                 backupPath: { type: string, nullable: true, example: null }
+ *                 changed:
+ *                   type: boolean
+ *                   description: Whether the content differed from the stored script
+ *                   example: true
+ *       400:
+ *         description: Unknown event or invalid content
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: Not authenticated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       403:
+ *         description: Admin permission required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+router.get('/scripts/:event', async (req, res) => {
+  try {
+    const result = await nutService.getEventScript(req.params.event);
+    res.json(result);
+  } catch (error) {
+    if (error.message.startsWith('Unknown event')) {
+      return res.status(400).json({ error: error.message });
+    }
+    if (error.message.includes('File does not exist')) {
+      return res.status(404).json({ error: error.message });
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/scripts/:event', async (req, res) => {
+  try {
+    const { content, create_backup = false } = req.body || {};
+
+    if (typeof content !== 'string') {
+      return res.status(400).json({ error: 'content parameter is required and must be a string' });
+    }
+
+    const result = await nutService.updateEventScript(req.params.event, content, create_backup);
+    res.json(result);
+  } catch (error) {
+    if (error.message.startsWith('Unknown event')) {
+      return res.status(400).json({ error: error.message });
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
 module.exports = router;

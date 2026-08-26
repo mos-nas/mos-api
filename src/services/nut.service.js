@@ -27,6 +27,9 @@ const EVENT_MESSAGES = {
 // Events sent with alert priority
 const ALERT_EVENTS = new Set(['ONBATT', 'LOWBATT', 'FSD', 'COMMBAD', 'NOCOMM', 'NOPARENT', 'REPLBATT']);
 
+// Events that can carry a user script in SCRIPT_DIR
+const EVENT_SCRIPTS = Object.keys(EVENT_MESSAGES);
+
 /**
  * NUT Service - Manages Network UPS Tools configuration, status and event handling.
  * The data model lives in nut.json; the init scripts render /etc/nut from it.
@@ -481,6 +484,77 @@ class NutService {
         exec(`setsid sh ${script} </dev/null >/dev/null 2>&1 &`);
       }
     }).catch(() => {});
+  }
+
+  /**
+   * Resolve the script path for an event, rejecting anything outside the known events.
+   * @private
+   * @param {string} event - NUT NOTIFYTYPE
+   * @returns {string} Absolute script path
+   */
+  _eventScriptPath(event) {
+    const name = String(event || '').toUpperCase();
+    if (!EVENT_SCRIPTS.includes(name)) {
+      throw new Error(`Unknown event: ${event}. Valid events: ${EVENT_SCRIPTS.join(', ')}`);
+    }
+    return `${SCRIPT_DIR}/${name.toLowerCase()}.sh`;
+  }
+
+  /**
+   * Reads the script for a NUT event.
+   * @param {string} event - NUT NOTIFYTYPE (e.g. ONBATT, ONLINE)
+   * @returns {Promise<Object>} Result object with script content and metadata
+   */
+  async getEventScript(event) {
+    const scriptPath = this._eventScriptPath(event);
+    const result = await require('./mos.service').readFile(scriptPath);
+    return { ...result, event: String(event).toUpperCase() };
+  }
+
+  /**
+   * Writes the script for a NUT event. No service restart is needed because
+   * upsmon runs the script straight from the boot stick when the event fires.
+   * @param {string} event - NUT NOTIFYTYPE (e.g. ONBATT, ONLINE)
+   * @param {string} content - New script content
+   * @param {boolean} createBackup - Whether to keep a .backup copy of the previous script
+   * @returns {Promise<Object>} Result with backup path plus change info
+   */
+  async updateEventScript(event, content, createBackup = false) {
+    if (typeof content !== 'string') {
+      throw new Error('content must be a string');
+    }
+
+    const mosService = require('./mos.service');
+    const scriptPath = this._eventScriptPath(event);
+
+    let previous = null;
+    try {
+      previous = (await mosService.readFile(scriptPath)).content;
+    } catch (error) {
+      if (!error.message.includes('File does not exist')) throw error;
+    }
+
+    await fs.mkdir(SCRIPT_DIR, { recursive: true });
+
+    // editFile only overwrites existing files, so seed it on the very first save
+    if (previous === null) {
+      await fs.writeFile(scriptPath, '', 'utf8');
+    }
+
+    const result = await mosService.editFile(scriptPath, content, createBackup);
+
+    try {
+      await execPromise(`chmod +x "${scriptPath}"`);
+    } catch (error) {
+      console.warn(`Warning: could not chmod +x ${scriptPath}: ${error.message}`);
+    }
+
+    return {
+      ...result,
+      event: String(event).toUpperCase(),
+      path: scriptPath,
+      changed: previous !== content
+    };
   }
 
   /**
