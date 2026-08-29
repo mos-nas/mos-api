@@ -7491,10 +7491,10 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
     if (!name || typeof name !== 'string') {
       throw new Error('Provider name is required and must be a string.');
     }
-    if (!/^[a-z0-9_-]+$/.test(name)) {
-      throw new Error('Provider name may only contain lowercase letters, numbers, dashes and underscores.');
+    if (!/^[A-Za-z0-9_-]+$/.test(name)) {
+      throw new Error('Provider name may only contain letters, numbers, dashes and underscores.');
     }
-    if (name === 'email') {
+    if (name.toLowerCase() === 'email') {
       throw new Error('The name "email" is reserved and cannot be used.');
     }
   }
