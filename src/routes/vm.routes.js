@@ -78,6 +78,29 @@ const { checkRole } = require('../middleware/auth.middleware');
  *           type: boolean
  *           description: Whether the VM XML was manually edited (via raw XML endpoint)
  *           example: false
+ *         performance:
+ *           type: object
+ *           nullable: true
+ *           description: CPU and memory usage, only returned with performance=true (null if the VM is not running)
+ *           properties:
+ *             cpu:
+ *               type: object
+ *               properties:
+ *                 usage:
+ *                   type: number
+ *                   example: 12.5
+ *                 unit:
+ *                   type: string
+ *                   example: "%"
+ *             memory:
+ *               type: object
+ *               properties:
+ *                 bytes:
+ *                   type: integer
+ *                   example: 4294967296
+ *                 formatted:
+ *                   type: string
+ *                   example: "4.00 GiB"
  *     VmOperationResult:
  *       type: object
  *       properties:
@@ -103,6 +126,15 @@ router.use(checkRole(['admin']));
  *     tags: [VM]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: performance
+ *         schema:
+ *           type: string
+ *           enum: [true, false]
+ *           default: "false"
+ *         description: Include CPU and memory usage (only running VMs, adds ~1s measurement delay)
+ *         example: "false"
  *     responses:
  *       200:
  *         description: List of all virtual machines retrieved successfully
@@ -154,7 +186,11 @@ router.use(checkRole(['admin']));
 // List all VMs
 router.get('/machines', async (req, res) => {
   try {
-    const vms = await vmService.listVms();
+    const { performance = 'false' } = req.query;
+
+    const vms = await vmService.listVms({
+      includePerformance: performance === 'true'
+    });
     res.json(vms);
   } catch (error) {
     res.status(500).json({ error: error.message });

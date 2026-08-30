@@ -46,6 +46,29 @@ const fs = require('fs');
  *           type: integer
  *           description: Container index/order
  *           example: 1
+ *         performance:
+ *           type: object
+ *           nullable: true
+ *           description: CPU and memory usage, only returned with performance=true (null if the container is not running)
+ *           properties:
+ *             cpu:
+ *               type: object
+ *               properties:
+ *                 usage:
+ *                   type: number
+ *                   example: 12.5
+ *                 unit:
+ *                   type: string
+ *                   example: "%"
+ *             memory:
+ *               type: object
+ *               properties:
+ *                 bytes:
+ *                   type: integer
+ *                   example: 536870912
+ *                 formatted:
+ *                   type: string
+ *                   example: "512 MiB"
  *     ContainerTemplate:
  *       type: object
  *       properties:
@@ -332,6 +355,15 @@ router.delete('/mos/remove', async (req, res) => {
  *     tags: [Docker]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: performance
+ *         schema:
+ *           type: string
+ *           enum: [true, false]
+ *           default: "false"
+ *         description: Include CPU and memory usage (only running containers)
+ *         example: "false"
  *     responses:
  *       200:
  *         description: Docker images retrieved successfully
@@ -445,7 +477,11 @@ router.delete('/mos/remove', async (req, res) => {
 // Get Docker images with update status
 router.get('/mos/containers', async (req, res) => {
   try {
-    const images = await dockerService.getDockerImages();
+    const { performance = 'false' } = req.query;
+
+    const images = await dockerService.getDockerImages({
+      includePerformance: performance === 'true'
+    });
     res.json(images);
   } catch (error) {
     if (error.message.includes('not found')) {

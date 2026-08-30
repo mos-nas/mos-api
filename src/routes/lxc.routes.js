@@ -61,6 +61,29 @@ const { checkRole } = require('../middleware/auth.middleware');
  *         invalid_config:
  *           type: boolean
  *           description: True for broken containers found on disk (config present but not listed by LXC). For these entries only name is set, all other fields are null.
+ *         performance:
+ *           type: object
+ *           nullable: true
+ *           description: CPU and memory usage, only returned with performance=true
+ *           properties:
+ *             cpu:
+ *               type: object
+ *               properties:
+ *                 usage:
+ *                   type: number
+ *                   example: 12.5
+ *                 unit:
+ *                   type: string
+ *                   example: "%"
+ *             memory:
+ *               type: object
+ *               properties:
+ *                 bytes:
+ *                   type: integer
+ *                   example: 536870912
+ *                 formatted:
+ *                   type: string
+ *                   example: "512.00 MiB"
  *     ContainerCreateRequest:
  *       type: object
  *       required:
@@ -208,6 +231,15 @@ router.use(checkRole(['admin']));
  *     tags: [LXC]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: performance
+ *         schema:
+ *           type: string
+ *           enum: [true, false]
+ *           default: "false"
+ *         description: Include CPU and memory usage (only running containers, adds ~1s measurement delay)
+ *         example: "false"
  *     responses:
  *       200:
  *         description: List of all containers
@@ -249,7 +281,11 @@ router.use(checkRole(['admin']));
  */
 router.get('/containers', async (req, res) => {
   try {
-    const containers = await lxcService.listContainers();
+    const { performance = 'false' } = req.query;
+
+    const containers = await lxcService.listContainers({
+      includePerformance: performance === 'true'
+    });
     res.json(containers);
   } catch (error) {
     res.status(500).json({ error: error.message });

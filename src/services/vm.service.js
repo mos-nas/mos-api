@@ -506,9 +506,12 @@ class VmService {
 
   /**
    * List all virtual machines with detailed information
+   * @param {Object} options - Options for the VM listing
    * @returns {Promise<Array>} List of VMs with their status, disk info and VNC port
    */
-  async listVms() {
+  async listVms(options = {}) {
+    const { includePerformance = false } = options;
+
     try {
       // List running VMs
       const { stdout: runningStdout } = await execPromise('virsh list --name');
@@ -525,7 +528,8 @@ class VmService {
           state: runningVms.includes(name) ? 'running' : 'stopped',
           disks: [],
           vncPort: null,
-          autostart: false
+          autostart: false,
+          performance: null
         };
 
         try {
@@ -624,6 +628,17 @@ class VmService {
           vm.icon = null;
           vm.description = null;
           vm.customIcon = this.hasCustomIcon(vm.name);
+        }
+      }
+
+      // Get Performance-Daten only if requested (running VMs only)
+      if (includePerformance && runningVms.length > 0) {
+        const usageMap = new Map((await this.getVmUsage()).map(u => [u.name, u]));
+        for (const vm of vms) {
+          const usage = usageMap.get(vm.name);
+          vm.performance = usage && usage.state === 'running'
+            ? { cpu: usage.cpu, memory: usage.memory }
+            : null;
         }
       }
 

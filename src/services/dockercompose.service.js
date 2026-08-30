@@ -6,6 +6,7 @@ const os = require('os');
 const axios = require('axios');
 const dockerService = require('./docker.service');
 const mosService = require('./mos.service');
+const systemService = require('./system.service');
 
 const execPromise = util.promisify(exec);
 
@@ -972,10 +973,32 @@ class DockerComposeService {
   }
 
   /**
+   * Sum up the CPU/memory metrics of all containers belonging to a stack
+   * @param {Array<string>} containers - Container names of the stack
+   * @param {Map} performanceMap - Metrics per container (running containers only)
+   * @returns {Object|null} Aggregated metrics, null if no container is running
+   */
+  _aggregatePerformance(containers, performanceMap) {
+    const metrics = containers.map(name => performanceMap.get(name)).filter(Boolean);
+    if (metrics.length === 0) return null;
+
+    const cpuUsage = metrics.reduce((sum, m) => sum + m.cpu.usage, 0);
+    const bytes = metrics.reduce((sum, m) => sum + m.memory.bytes, 0);
+
+    return {
+      cpu: { usage: parseFloat(cpuUsage.toFixed(2)), unit: '%' },
+      memory: { bytes, formatted: systemService.formatMemoryBytes(bytes) }
+    };
+  }
+
+  /**
    * Get all compose stacks
+   * @param {Object} options - Options for the stack listing
    * @returns {Promise<Array>} Array of stack objects
    */
-  async getStacks() {
+  async getStacks(options = {}) {
+    const { includePerformance = false } = options;
+
     try {
       const basePath = this._getBasePath();
 
@@ -1050,11 +1073,24 @@ class DockerComposeService {
               autostart: autostart,
               webui: webui,
               no_autoupdate: noAutoupdate,
-              running: running
+              running: running,
+              performance: null
             });
           } catch (err) {
             console.warn(`Failed to read stack '${entry.name}': ${err.message}`);
           }
+        }
+      }
+
+      // Get Performance-Daten only if requested: measure all containers in one
+      // batch, then aggregate them per stack
+      if (includePerformance) {
+        const performanceMap = await dockerService.getContainerPerformance(
+          stacks.flatMap(stack => stack.containers)
+        );
+
+        for (const stack of stacks) {
+          stack.performance = this._aggregatePerformance(stack.containers, performanceMap);
         }
       }
 

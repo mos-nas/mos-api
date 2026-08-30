@@ -3,6 +3,7 @@ const { exec, execFile } = require('child_process');
 const util = require('util');
 const path = require('path');
 const axios = require('axios');
+const systemService = require('./system.service');
 
 // Promisify exec for easier use with async/await
 const execPromise = util.promisify(exec);
@@ -56,10 +57,50 @@ class DockerService {
   }
 
   /**
+   * Gets CPU/memory usage for running containers via the Docker stats API.
+   * Stopped containers are skipped.
+   * @param {Array<string>} names - Container names to measure
+   * @returns {Promise<Map>} Map of container name to performance metrics
+   */
+  async getContainerPerformance(names) {
+    const running = await this._getRunningContainers();
+    const targets = names.filter(name => running.has(name));
+
+    const entries = await Promise.all(targets.map(async name => {
+      try {
+        const { data } = await axios.get(
+          `http://localhost/containers/${encodeURIComponent(name)}/stats?stream=false`,
+          { socketPath: '/var/run/docker.sock', timeout: 15000 }
+        );
+
+        // Not normalized by core count, matches the docker stats CLI output
+        const cpuDelta = data.cpu_stats.cpu_usage.total_usage - data.precpu_stats.cpu_usage.total_usage;
+        const systemDelta = data.cpu_stats.system_cpu_usage - data.precpu_stats.system_cpu_usage;
+        const cpuUsage = systemDelta > 0 && cpuDelta > 0 ? (cpuDelta / systemDelta) * 100 : 0;
+
+        // Inactive page cache is not counted as used memory
+        const bytes = (data.memory_stats.usage || 0) - (data.memory_stats.stats?.inactive_file || 0);
+
+        return [name, {
+          cpu: { usage: parseFloat(cpuUsage.toFixed(2)), unit: '%' },
+          memory: { bytes, formatted: systemService.formatMemoryBytes(bytes) }
+        }];
+      } catch (error) {
+        return null;
+      }
+    }));
+
+    return new Map(entries.filter(Boolean));
+  }
+
+  /**
    * Reads the Docker containers file and checks for available updates
+   * @param {Object} options - Options for the container listing
    * @returns {Promise<Array>} Array of Docker images with update status
    */
-  async getDockerImages() {
+  async getDockerImages(options = {}) {
+    const { includePerformance = false } = options;
+
     try {
       // Path to containers.json
       const filePath = '/var/lib/docker/mos/containers';
@@ -113,6 +154,11 @@ class DockerService {
         }
       }
 
+      // Get Performance-Daten only if requested
+      const performanceMap = includePerformance
+        ? await this.getContainerPerformance(images.map(image => image.name))
+        : null;
+
       // Process each image and add update status
       return images.map(image => {
         const updateAvailable = image.local !== image.remote;
@@ -122,7 +168,8 @@ class DockerService {
           ...image,
           update_available: updateAvailable,
           default_shell: info.default_shell,
-          no_autoupdate: info.no_autoupdate
+          no_autoupdate: info.no_autoupdate,
+          performance: performanceMap?.get(image.name) || null
         };
       });
     } catch (error) {

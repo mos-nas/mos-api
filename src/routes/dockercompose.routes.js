@@ -53,6 +53,29 @@ const dockerComposeService = require('../services/dockercompose.service');
  *           description: Whether automatic updates are disabled for this stack
  *           default: false
  *           example: false
+ *         performance:
+ *           type: object
+ *           nullable: true
+ *           description: CPU and memory usage summed up over all containers of the stack, only returned with performance=true
+ *           properties:
+ *             cpu:
+ *               type: object
+ *               properties:
+ *                 usage:
+ *                   type: number
+ *                   example: 12.5
+ *                 unit:
+ *                   type: string
+ *                   example: "%"
+ *             memory:
+ *               type: object
+ *               properties:
+ *                 bytes:
+ *                   type: integer
+ *                   example: 536870912
+ *                 formatted:
+ *                   type: string
+ *                   example: "512 MiB"
  */
 
 // Only admin can access these routes
@@ -67,6 +90,15 @@ router.use(checkRole(['admin']));
  *     tags: [Docker Compose]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: performance
+ *         schema:
+ *           type: string
+ *           enum: [true, false]
+ *           default: "false"
+ *         description: Include CPU and memory usage aggregated per stack (only running containers)
+ *         example: "false"
  *     responses:
  *       200:
  *         description: List of stacks
@@ -96,7 +128,11 @@ router.use(checkRole(['admin']));
  */
 router.get('/stacks', async (req, res) => {
   try {
-    const stacks = await dockerComposeService.getStacks();
+    const { performance = 'false' } = req.query;
+
+    const stacks = await dockerComposeService.getStacks({
+      includePerformance: performance === 'true'
+    });
     res.json(stacks);
   } catch (error) {
     res.status(500).json({ error: error.message });

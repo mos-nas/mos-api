@@ -267,10 +267,38 @@ class LxcService {
   }
 
   /**
+   * Collect CPU/memory usage for running containers
+   * @param {Array<string>} names - Names of running containers
+   * @returns {Promise<Map>} Map of container name to performance metrics
+   * @private
+   */
+  async _getPerformanceMap(names) {
+    if (names.length === 0) return new Map();
+
+    const snapshots = await Promise.all(names.map(name => this.getContainerCpuSnapshot(name)));
+
+    // Gather memory concurrently with the 1s CPU measurement window
+    const [memoryData] = await Promise.all([
+      Promise.all(names.map(name => this.getContainerMemoryUsage(name))),
+      new Promise(r => setTimeout(r, 1000))
+    ]);
+
+    const cpuUsages = await Promise.all(snapshots.map(snapshot => this.calculateCpuUsage(snapshot)));
+
+    return new Map(names.map((name, i) => [name, {
+      cpu: { usage: cpuUsages[i], unit: '%' },
+      memory: memoryData[i]
+    }]));
+  }
+
+  /**
    * List all LXC containers with their status and IP addresses
+   * @param {Object} options - Options for the container listing
    * @returns {Promise<Array>} Array of container objects with name, state, and IP addresses
    */
-  async listContainers() {
+  async listContainers(options = {}) {
+    const { includePerformance = false } = options;
+
     try {
       // Use the fancy format with explicit header
       const { stdout } = await execPromise('lxc-ls --fancy');
@@ -327,6 +355,11 @@ class LxcService {
         parsedLines.push({ name, state, ipv4, ipv6, unprivileged });
       }
 
+      // Get Performance-Daten only if requested (running containers only)
+      const performanceMap = includePerformance
+        ? await this._getPerformanceMap(parsedLines.filter(p => p.state === 'running').map(p => p.name))
+        : null;
+
       // Enrich all containers in parallel (config reads + metadata lookups)
       // Each container's config is read ONCE via _parseContainerConfig() instead of 4-5 separate sync reads
       const enrichedContainers = await Promise.all(parsedLines.map(async (parsed) => {
@@ -355,7 +388,8 @@ class LxcService {
           custom_icon: this.hasCustomIcon(parsed.name),
           config: `${lxcPath}/${parsed.name}/config`,
           active_operation,
-          invalid_config: false
+          invalid_config: false,
+          performance: performanceMap?.get(parsed.name) || null
         };
       }));
 
@@ -408,7 +442,8 @@ class LxcService {
         custom_icon: null,
         config: `${lxcPath}/${dir.name}/config`,
         active_operation: null,
-        invalid_config: true
+        invalid_config: true,
+        performance: null
       };
     }));
 
