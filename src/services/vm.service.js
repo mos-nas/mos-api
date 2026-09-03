@@ -97,8 +97,11 @@ class VmService {
       ovmf_tpm: '/usr/share/qemu/OVMF/OVMF_CODE-TPM.fd'
     };
 
-    // OVMF VARS template path (needed for UEFI)
-    this.OVMF_VARS_TEMPLATE = '/usr/share/qemu/OVMF/OVMF_VARS.fd';
+    // NVRAM template must match its OVMF_CODE build
+    this.OVMF_VARS_TEMPLATES = {
+      ovmf: '/usr/share/qemu/OVMF/OVMF_VARS.fd',
+      ovmf_tpm: '/usr/share/qemu/OVMF/OVMF_VARS-TPM.fd'
+    };
 
     // NVRAM storage path for UEFI VMs
     this.NVRAM_PATH = '/etc/libvirt/qemu/nvram';
@@ -1046,11 +1049,13 @@ class VmService {
       // Check which BIOS files exist
       const biosAvailable = {};
       for (const [key, filePath] of Object.entries(this.BIOS_PATHS)) {
+        const varsTemplate = this.OVMF_VARS_TEMPLATES[key] || null;
         try {
           await fs.access(filePath);
-          biosAvailable[key] = { available: true, path: filePath };
+          if (varsTemplate) await fs.access(varsTemplate);
+          biosAvailable[key] = { available: true, path: filePath, varsTemplate };
         } catch (e) {
-          biosAvailable[key] = { available: false, path: filePath };
+          biosAvailable[key] = { available: false, path: filePath, varsTemplate };
         }
       }
 
@@ -1247,11 +1252,11 @@ class VmService {
 
     // BIOS/UEFI configuration with NVRAM
     if (bios === 'ovmf' || bios === 'ovmf-tpm') {
-      const biosPath = bios === 'ovmf-tpm' ? this.BIOS_PATHS.ovmf_tpm : this.BIOS_PATHS.ovmf;
+      const firmware = bios === 'ovmf-tpm' ? 'ovmf_tpm' : 'ovmf';
       const nvramPath = `${this.NVRAM_PATH}/${vmUuid}_VARS.fd`;
       xml += `
-    <loader readonly='yes' type='pflash'>${biosPath}</loader>
-    <nvram template='${this.OVMF_VARS_TEMPLATE}'>${nvramPath}</nvram>`;
+    <loader readonly='yes' type='pflash'>${this.BIOS_PATHS[firmware]}</loader>
+    <nvram template='${this.OVMF_VARS_TEMPLATES[firmware]}'>${nvramPath}</nvram>`;
     }
 
     // Only add os/boot if no per-device boot order is specified

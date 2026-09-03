@@ -57,6 +57,19 @@ class DockerService {
   }
 
   /**
+   * Checks whether a container deployment is currently in progress
+   * @returns {Promise<boolean>} True if a deploy script is running
+   */
+  async _isDeployRunning() {
+    try {
+      await execFilePromise('pgrep', ['-f', '/usr/local/bin/mos-deploy_docker']);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  /**
    * Gets CPU/memory usage for running containers via the Docker stats API.
    * Stopped containers are skipped.
    * @param {Array<string>} names - Container names to measure
@@ -119,13 +132,14 @@ class DockerService {
           stdout.trim().split('\n').filter(name => name.length > 0)
         );
 
-        const originalLength = images.length;
         // Skip cleanup if Docker reports no containers at all
-        if (dockerContainers.size > 0) {
-          images = images.filter(image => dockerContainers.has(image.name));
-        }
+        const hasOrphans = dockerContainers.size > 0 &&
+          images.some(image => !dockerContainers.has(image.name));
 
-        if (images.length < originalLength) {
+        // An update/recreate removes its container before creating it again, which looks orphaned
+        if (hasOrphans && !(await this._isDeployRunning())) {
+          images = images.filter(image => dockerContainers.has(image.name));
+
           // Reindex remaining entries
           images.sort((a, b) => (a.index || 0) - (b.index || 0));
           images.forEach((image, i) => { image.index = i + 1; });
