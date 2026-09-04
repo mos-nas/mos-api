@@ -3741,23 +3741,33 @@ router.post('/updateos', async (req, res) => {
     // update_kernel is optional and defaults to true
     const updateKernel = update_kernel !== false;
 
-    const result = await mosService.updateOS(version, channel, updateKernel);
+    const { done, ...result } = await mosService.updateOS(version, channel, updateKernel);
 
-    // Update plugins in background (after OS update has completed)
-    if (update_plugins) {
-      (async () => {
-        try {
-          const versions = await pluginsService.checkUpdates();
-          const updatable = versions.filter(v => v.update_available);
-          if (updatable.length > 0) {
-            await pluginsService.updatePlugins();
-          } else {
-            await pluginsService.sendNotification('Plugin', 'All Plugins up-to-date', 'normal');
+    const pluginUpdates = update_plugins
+      ? (async () => {
+          try {
+            const versions = await pluginsService.checkUpdates();
+            const updatable = versions.filter(v => v.update_available);
+            if (updatable.length > 0) {
+              await pluginsService.updatePlugins();
+            } else {
+              await pluginsService.sendNotification('Plugin', 'All Plugins up-to-date', 'normal');
+            }
+          } catch {
+            // Plugin update errors must not block the reboot notification
           }
-        } catch {
-          // Plugin update errors should not block response
-        }
-      })();
+        })()
+      : Promise.resolve();
+
+    // Reboot notification is done by the API, not the script, so it can wait for plugins too
+    if (done) {
+      Promise.all([done, pluginUpdates])
+        .then(([exitCode]) => {
+          if (exitCode === 0) {
+            return pluginsService.sendNotification('MOS Update', 'MOS update done, please reboot', 'normal');
+          }
+        })
+        .catch(() => {});
     }
 
     if (result.success) {
@@ -3868,7 +3878,17 @@ router.post('/rollbackos', async (req, res) => {
     // only if explicitly set to false, "not_kernel" is passed to the script
     const kernelRollback = kernel_rollback !== false;
 
-    const result = await mosService.rollbackOS(kernelRollback);
+    const { done, ...result } = await mosService.rollbackOS(kernelRollback);
+
+    if (done) {
+      done
+        .then((exitCode) => {
+          if (exitCode === 0) {
+            return pluginsService.sendNotification('MOS Update', 'Rollback done, please reboot', 'normal');
+          }
+        })
+        .catch(() => {});
+    }
 
     if (result.success) {
       res.json(result);
