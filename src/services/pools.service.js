@@ -5113,23 +5113,12 @@ class PoolsService {
         devicePath = device.device;
       } else if (device && device.id) {
         // For BTRFS multi-device pools, device path might not be set yet, but we have UUID
-        // Try to resolve device path from UUID
-        try {
-          devicePath = await this.getRealDevicePathFromUuid(device.id);
-        } catch (error) {
-          // Could not resolve UUID, return unknown
-          return {
-            ...device,
-            diskType: {
-              type: 'unknown',
-              rotational: null,
-              removable: null,
-              usbInfo: null
-            }
-          };
-        }
-      } else {
-        // Invalid device format, return unknown
+        // Resolves to null for detached or unknown UUIDs
+        devicePath = await this.getRealDevicePathFromUuid(device.id);
+      }
+
+      // Invalid device format or unresolvable UUID - nothing to enrich
+      if (!devicePath) {
         return {
           ...device,
           diskType: {
@@ -7526,18 +7515,37 @@ class PoolsService {
         }
       }
 
-      // Verify parity device size is larger or equal to the largest data device
-      for (const parityDevice of parityDevices) {
-        const paritySize = await this.getDeviceSize(parityDevice);
+      // Validate parity devices up front - partitioning/formatting the data
+      // devices later on is destructive and must not run into a parity error
+      const parityByIds = new Map();
+      if (parityDevices.length > 0) {
+        const toGB = bytes => (bytes / 1024 / 1024 / 1024).toFixed(2);
+
         let largestDataDevice = 0;
+        let largestDataDeviceName = null;
         for (const device of devices) {
           const deviceSize = await this.getDeviceSize(device);
           if (deviceSize > largestDataDevice) {
             largestDataDevice = deviceSize;
+            largestDataDeviceName = device;
           }
         }
-        if (paritySize < largestDataDevice) {
-          throw new Error('Parity device must be at least as large as the largest data device');
+
+        for (const parityDevice of parityDevices) {
+          const paritySize = await this.getDeviceSize(parityDevice);
+          if (paritySize < largestDataDevice) {
+            throw new Error(
+              `Parity device must be at least as large as the largest data device: ` +
+              `${parityDevice} (${toGB(paritySize)} GB) is smaller than ` +
+              `${largestDataDeviceName} (${toGB(largestDataDevice)} GB)`
+            );
+          }
+
+          const byIdPath = await this._getDeviceByIdPath(parityDevice);
+          if (!byIdPath) {
+            throw new Error(`Could not find /dev/disk/by-id/ path for parity device ${parityDevice}`);
+          }
+          parityByIds.set(parityDevice, byIdPath);
         }
       }
 
@@ -7634,12 +7642,7 @@ class PoolsService {
       const preparedParityDevices = [];
       for (let i = 0; i < parityDevices.length; i++) {
         const parityDevice = parityDevices[i];
-
-        // Get the by-id path for parity device
-        const byIdPath = await this._getDeviceByIdPath(parityDevice);
-        if (!byIdPath) {
-          throw new Error(`Could not find /dev/disk/by-id/ path for parity device ${parityDevice}`);
-        }
+        const byIdPath = parityByIds.get(parityDevice);
 
         // Get device size from physical device (not partition)
         const deviceSize = await this._getDeviceSizeInKB(parityDevice);
@@ -7856,26 +7859,28 @@ class PoolsService {
           }
         }
 
-        // Stop NonRAID array
-        // Cancel any running checks first (ignore errors if no check is running)
-        try {
-          await execPromise('echo "check CANCEL" > /proc/nmdcmd');
-        } catch (e) {
-          // Ignore error - no check was running
-        }
-
-        // Stop the array
-        try {
-          await execPromise('echo "stop" > /proc/nmdcmd');
-
-          // Unload module ONLY if stop was successful
+        // Stop NonRAID array - only if the module actually got loaded
+        const nmdcmdAvailable = await fs.access('/proc/nmdcmd').then(() => true, () => false);
+        if (nmdcmdAvailable) {
+          // Cancel any running checks first
           try {
-            await execPromise('modprobe -r md-nonraid');
+            await execPromise('echo "check CANCEL" > /proc/nmdcmd');
           } catch (e) {
-            console.warn(`Failed to unload md-nonraid module: ${e.message}`);
+            // Ignore error - no check was running
           }
-        } catch (e) {
-          console.warn(`Failed to stop NonRAID array: ${e.message}`);
+
+          try {
+            await execPromise('echo "stop" > /proc/nmdcmd');
+
+            // Unload module ONLY if stop was successful
+            try {
+              await execPromise('modprobe -r md-nonraid');
+            } catch (e) {
+              console.warn(`Failed to unload md-nonraid module: ${e.message}`);
+            }
+          } catch (e) {
+            console.warn(`Failed to stop NonRAID array: ${e.message}`);
+          }
         }
 
       } catch (cleanupError) {
@@ -7887,7 +7892,7 @@ class PoolsService {
   }
 
   /**
-   * Get device path from /dev/disk/by-id/ (excluding wwn- and scsi- entries)
+   * Get device path from /dev/disk/by-id/ (preferring non wwn-/scsi- entries)
    * @param {string} device - Device path (e.g., /dev/sda)
    * @returns {Promise<string|null>} - by-id path or null if not found
    * @private
@@ -7898,18 +7903,20 @@ class PoolsService {
       const { stdout } = await execPromise(`ls -l /dev/disk/by-id/ | grep "${deviceBasename}$"`);
 
       const lines = stdout.trim().split('\n');
+      let fallback = null;
       for (const line of lines) {
         const match = line.match(/([^\s]+)\s+->\s+/);
         if (match) {
           const byIdName = match[1];
-          // Exclude wwn- and scsi- entries
+          // wwn-/scsi- only as fallback, disks without serial
           if (!byIdName.startsWith('wwn-') && !byIdName.startsWith('scsi-')) {
             return byIdName;
           }
+          if (!fallback) fallback = byIdName;
         }
       }
 
-      return null;
+      return fallback;
     } catch (error) {
       console.error(`Error getting by-id path for ${device}: ${error.message}`);
       return null;

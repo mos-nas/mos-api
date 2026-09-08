@@ -1401,27 +1401,32 @@ class MosService {
       const allowed = ['enabled', 'directory', 'appdata', 'docker_net', 'filesystem', 'start_wait', 'docker_options', 'update_check'];
       let updateCheckChanged = false;
 
-      // Check directory paths for mount status
-      // Always validate 'directory' to catch legacy nonraid/mergerfs paths
-      // Use updates.directory if provided, otherwise fall back to current.directory
-      // This ensures validation runs even when only 'enabled: true' is sent
-      const pathsToCheck = {};
-      const effectiveDirectory = updates.directory || current.directory;
-      if (effectiveDirectory) {
-        pathsToCheck.directory = effectiveDirectory;
-      }
-      if (updates.appdata && updates.appdata !== current.appdata) {
-        pathsToCheck.appdata = updates.appdata;
-      }
+      // Path validation guards the start only. Disabling must never be blocked by it
+      const willBeEnabled = updates.enabled !== undefined
+        ? updates.enabled === true
+        : current.enabled === true;
 
-      if (Object.keys(pathsToCheck).length > 0) {
-        const directoryCheck = await this._checkMultipleDirectories(pathsToCheck, 'docker');
+      if (willBeEnabled) {
+        // Validate the effective paths (not just the changed ones)
+        const pathsToCheck = {};
+        const effectiveDirectory = updates.directory || current.directory;
+        const effectiveAppdata = updates.appdata || current.appdata;
+        if (effectiveDirectory) {
+          pathsToCheck.directory = effectiveDirectory;
+        }
+        if (effectiveAppdata) {
+          pathsToCheck.appdata = effectiveAppdata;
+        }
 
-        if (directoryCheck.hasErrors) {
-          const errorDetails = directoryCheck.errors.map(error =>
-            `${error.field}: ${error.error}${error.suggestion ? ' ' + error.suggestion : ''}`
-          ).join('; ');
-          throw new Error(`Docker directory conflict: ${errorDetails}`);
+        if (Object.keys(pathsToCheck).length > 0) {
+          const directoryCheck = await this._checkMultipleDirectories(pathsToCheck, 'docker');
+
+          if (directoryCheck.hasErrors) {
+            const errorDetails = directoryCheck.errors.map(error =>
+              `${error.field}: ${error.error}${error.suggestion ? ' ' + error.suggestion : ''}`
+            ).join('; ');
+            throw new Error(`Docker directory conflict: ${errorDetails}`);
+          }
         }
       }
 
@@ -1522,20 +1527,22 @@ class MosService {
 
       // Docker service stop/start on configuration changes
       try {
-        // Docker always stop when configuration is changed
-        // Ignore errors on stop (e.g. if service is already stopped)
-        try {
-          await execPromise('/etc/init.d/docker stop');
-        } catch (stopError) {
-          // Ignore stop errors (service could already be stopped)
-        }
+        await execPromise('/etc/init.d/docker stop');
+      } catch (stopError) {
+        // Service could already be stopped, the actual state is verified below
+      }
 
-        // Docker start only if enabled = true (mos-start reads the new file)
-        if (current.enabled === true) {
+      if (current.enabled === true) {
+        try {
           await execPromise('/usr/local/bin/mos-start docker');
+        } catch (error) {
+          throw new Error(`Error starting docker service: ${error.message}`);
         }
-      } catch (error) {
-        throw new Error(`Error restarting docker service: ${error.message}`);
+      } else if (await this._isDockerRunning()) {
+        console.warn(
+          'Warning: Docker is disabled in the settings but the daemon is still responding. ' +
+          'It may be holding a data-root that is no longer mounted.'
+        );
       }
 
       // mos-cron_update execute if update_check changed
@@ -1549,7 +1556,7 @@ class MosService {
 
       return current;
     } catch (error) {
-      throw new Error(`Error writing docker.json: ${error.message}`);
+      throw new Error(`Error updating docker settings: ${error.message}`);
     }
   }
 
@@ -5482,14 +5489,17 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
       // Create a detached child process that executes the update immediately
       const { spawn } = require('child_process');
 
-      // Execute the update directly in a detached process
+      // Own process group so the update survives an API shutdown, but not unref'd
+      // so the exit handle stays alive and callers can await completion
       const child = spawn('/usr/local/bin/mos-os_update', args, {
         detached: true,
         stdio: 'ignore'
       });
 
-      // Detach the child process from the parent, so it continues running even if the API is terminated
-      child.unref();
+      const done = new Promise((resolve) => {
+        child.on('exit', (code) => resolve(code));
+        child.on('error', () => resolve(null));
+      });
 
       return {
         success: true,
@@ -5497,7 +5507,8 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
         version,
         channel,
         updateKernel,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        done
       };
 
     } catch (error) {
@@ -5531,20 +5542,23 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
       // Create a detached child process that executes the rollback immediately
       const { spawn } = require('child_process');
 
-      // Execute the rollback directly in a detached process
+      // See updateOS: detached but not unref'd, so completion stays observable
       const child = spawn('/usr/local/bin/mos-os_update', args, {
         detached: true,
         stdio: 'ignore'
       });
 
-      // Detach the child process from the parent, so it continues running even if the API is terminated
-      child.unref();
+      const done = new Promise((resolve) => {
+        child.on('exit', (code) => resolve(code));
+        child.on('error', () => resolve(null));
+      });
 
       return {
         success: true,
         message: 'OS rollback initiated successfully',
         kernelRollback,
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        done
       };
 
     } catch (error) {
