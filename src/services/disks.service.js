@@ -3214,7 +3214,9 @@ class DisksService {
 
         // Format partition
         let forceOption = '';
-        if (filesystem === 'btrfs' || filesystem === 'xfs') {
+        if (filesystem === 'xfs') {
+          forceOption = ' -f -n ftype=1';
+        } else if (filesystem === 'btrfs') {
           forceOption = ' -f';
         } else if (filesystem === 'ext4') {
           forceOption = ' -F';
@@ -3223,7 +3225,9 @@ class DisksService {
       } else {
         // Format entire device
         let forceOption = '';
-        if (filesystem === 'btrfs' || filesystem === 'xfs') {
+        if (filesystem === 'xfs') {
+          forceOption = ' -f -n ftype=1';
+        } else if (filesystem === 'btrfs') {
           forceOption = ' -f';
         } else if (filesystem === 'ext4') {
           forceOption = ' -F';
@@ -3356,18 +3360,20 @@ class DisksService {
           throw new Error(`Partition ${partitionPath} was not created. This can happen with slow devices or controllers.`);
         }
 
-        // Add force option for btrfs, xfs and ext4 to overwrite existing filesystems
         let forceOption = '';
-        if (filesystem === 'btrfs' || filesystem === 'xfs') {
+        if (filesystem === 'xfs') {
+          forceOption = ' -f -n ftype=1';
+        } else if (filesystem === 'btrfs') {
           forceOption = ' -f';
         } else if (filesystem === 'ext4') {
           forceOption = ' -F';
         }
         await execPromise(`mkfs.${filesystem}${forceOption} ${partitionPath}`);
       } else {
-        // Format entire device
         let forceOption = '';
-        if (filesystem === 'btrfs' || filesystem === 'xfs') {
+        if (filesystem === 'xfs') {
+          forceOption = ' -f -n ftype=1';
+        } else if (filesystem === 'btrfs') {
           forceOption = ' -f';
         } else if (filesystem === 'ext4') {
           forceOption = ' -F';

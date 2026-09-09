@@ -3678,7 +3678,7 @@ class PoolsService {
           command = `mkfs.ext4 -F ${targetDevice}`;
           break;
         case 'xfs':
-          command = `mkfs.xfs -f ${targetDevice}`;
+          command = `mkfs.xfs -f -n ftype=1 ${targetDevice}`;
           break;
         case 'btrfs':
           command = `mkfs.btrfs -f ${targetDevice}`;

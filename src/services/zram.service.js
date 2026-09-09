@@ -305,7 +305,7 @@ class ZramService {
       if (filesystem === 'ext4') {
         await execPromise(`mkfs.ext4 -F -U ${uuid} ${zramDev}`);
       } else if (filesystem === 'xfs') {
-        await execPromise(`mkfs.xfs -f -m uuid=${uuid} ${zramDev}`);
+        await execPromise(`mkfs.xfs -f -n ftype=1 -m uuid=${uuid} ${zramDev}`);
       } else if (filesystem === 'btrfs') {
         await execPromise(`mkfs.btrfs -f -U ${uuid} ${zramDev}`);
       } else {
