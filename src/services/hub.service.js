@@ -706,9 +706,9 @@ class HubService {
     // Filter by search term
     if (searchLower) {
       filtered = filtered.filter(t => {
-        const name = (t.name || '').toLowerCase();
-        const maintainer = (t.maintainer || '').toLowerCase();
-        const description = (t.description || '').toLowerCase();
+        const name = this._lc(t.name);
+        const maintainer = this._lc(t.maintainer);
+        const description = this._lc(t.description);
         return name.includes(searchLower) || maintainer.includes(searchLower) || description.includes(searchLower);
       });
     }
@@ -717,7 +717,7 @@ class HubService {
     if (categoryLower) {
       filtered = filtered.filter(t => {
         if (!Array.isArray(t.category)) return false;
-        return t.category.some(c => c.toLowerCase().includes(categoryLower));
+        return t.category.some(c => this._lc(c).includes(categoryLower));
       });
     }
 
@@ -727,8 +727,8 @@ class HubService {
         let valA, valB;
         switch (sort) {
           case 'name':
-            valA = (a.name || '').toLowerCase();
-            valB = (b.name || '').toLowerCase();
+            valA = this._lc(a.name);
+            valB = this._lc(b.name);
             return order === 'desc' ? valB.localeCompare(valA) : valA.localeCompare(valB);
           case 'created':
             valA = a.created_at || 0;
@@ -818,6 +818,104 @@ class HubService {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * Lowercases a value only if it is a string, otherwise returns ''.
+   * Guards filtering/sorting against wrongly typed fields in a stale index
+   * that was built before template validation existed.
+   * @param {*} v - Value to lowercase
+   * @returns {string} Lowercased string or ''
+   */
+  _lc(v) {
+    return typeof v === 'string' ? v.toLowerCase() : '';
+  }
+
+  /**
+   * Builds an "owner/repo" label from a repository path (for log messages)
+   * @param {string} repoPath - Path to git repository root
+   * @returns {string} Label like 'owner/repo'
+   */
+  _repoLabel(repoPath) {
+    if (!repoPath || typeof repoPath !== 'string') return 'unknown';
+    return `${path.basename(path.dirname(repoPath))}/${path.basename(repoPath)}`;
+  }
+
+  /**
+   * Finds the first field whose type would break index filtering, sorting or
+   * the UI (e.g. an array where a string is expected).
+   * @param {Object} template - Parsed template JSON
+   * @returns {string|null} Offending field name or null when valid
+   */
+  _findInvalidField(template) {
+    const stringFields = [
+      'name', 'description', 'readme_url', 'icon', 'donate', 'support',
+      'project', 'homepage', 'website', 'repo', 'repository', 'author', 'web_ui_url'
+    ];
+    const listFields = ['category', 'architecture'];
+
+    for (const field of stringFields) {
+      const value = template[field];
+      if (value === undefined || value === null) continue;
+      if (typeof value !== 'string') return field;
+    }
+
+    for (const field of listFields) {
+      const value = template[field];
+      if (value === undefined || value === null) continue;
+      if (typeof value === 'string') continue;
+      if (!Array.isArray(value)) return field;
+      if (value.some(entry => typeof entry !== 'string')) return field;
+    }
+
+    return null;
+  }
+
+  /**
+   * Validates a template before indexing. Invalid templates are logged and
+   * skipped so a single broken file cannot break the whole hub.
+   * @param {Object} template - Parsed template JSON
+   * @param {string} fallbackName - Name used in the log when the template has none
+   * @param {string} repoPath - Path to git repository root
+   * @returns {boolean} True when the template is safe to index
+   */
+  _isTemplateIndexable(template, fallbackName, repoPath) {
+    const repoLabel = this._repoLabel(repoPath);
+
+    if (typeof template !== 'object' || Array.isArray(template)) {
+      console.error(`Hub: template ${fallbackName} from repo ${repoLabel} broken (not a JSON object), skipping`);
+      return false;
+    }
+
+    const invalidField = this._findInvalidField(template);
+    if (invalidField) {
+      const name = typeof template.name === 'string' && template.name ? template.name : fallbackName;
+      console.error(`Hub: template ${name} from repo ${repoLabel} broken (invalid type for "${invalidField}"), skipping`);
+      return false;
+    }
+
+    return true;
+  }
+
+  /**
+   * Validates maintainer.json. Wrongly typed fields are dropped instead of
+   * skipping the repo, so its templates stay available.
+   * @param {Object|null} info - Parsed maintainer.json
+   * @param {string} repoPath - Path to git repository root
+   * @returns {Object} Usable maintainer info
+   */
+  _validateMaintainerInfo(info, repoPath) {
+    if (!info) return {};
+
+    const valid = typeof info === 'object' && !Array.isArray(info) &&
+      ['maintainer', 'donation'].every(f => info[f] === undefined || info[f] === null || typeof info[f] === 'string');
+
+    if (!valid) {
+      console.error(`Hub: maintainer.json from repo ${this._repoLabel(repoPath)} broken, ignoring`);
+      return {};
+    }
+
+    return info;
   }
 
   /**
@@ -1036,6 +1134,7 @@ class HubService {
   async _processDockerTemplate(jsonPath, maintainerInfo, repoPath) {
     const template = await this._readJsonFile(jsonPath);
     if (!template) return null;
+    if (!this._isTemplateIndexable(template, path.basename(jsonPath, '.json'), repoPath)) return null;
 
     // Validate category is an array
     const category = Array.isArray(template.category) ? template.category : null;
@@ -1086,6 +1185,7 @@ class HubService {
   async _processPluginTemplate(jsonPath, maintainerInfo, repoPath) {
     const template = await this._readJsonFile(jsonPath);
     if (!template) return null;
+    if (!this._isTemplateIndexable(template, path.basename(jsonPath, '.json'), repoPath)) return null;
 
     // Validate category is an array (plugins may not have category, default to empty)
     const category = Array.isArray(template.category) ? template.category : [];
@@ -1140,6 +1240,7 @@ class HubService {
 
     const template = await this._readJsonFile(templatePath);
     if (!template) return null;
+    if (!this._isTemplateIndexable(template, path.basename(templateDir), repoPath)) return null;
 
     // Support both compose.yaml and compose.yml
     let composePath = path.join(templateDir, 'compose.yaml');
@@ -1227,69 +1328,82 @@ class HubService {
 
     for (const owner of owners) {
       const ownerPath = path.join(reposPath, owner);
-      const ownerStat = await fs.stat(ownerPath);
-      if (!ownerStat.isDirectory()) continue;
+      let repos;
+      try {
+        const ownerStat = await fs.stat(ownerPath);
+        if (!ownerStat.isDirectory()) continue;
 
-      // Get all repo directories under this owner
-      const repos = await fs.readdir(ownerPath);
+        // Get all repo directories under this owner
+        repos = await fs.readdir(ownerPath);
+      } catch (error) {
+        console.error(`Hub: cannot read repo owner ${owner} (${error.message}), skipping`);
+        continue;
+      }
 
       for (const repo of repos) {
         const repoPath = path.join(ownerPath, repo);
-        const repoStat = await fs.stat(repoPath);
-        if (!repoStat.isDirectory()) continue;
+        try {
+          const repoStat = await fs.stat(repoPath);
+          if (!repoStat.isDirectory()) continue;
 
-        // Read maintainer.json
-        const maintainerPath = path.join(repoPath, 'maintainer.json');
-        const maintainerInfo = await this._readJsonFile(maintainerPath) || {};
+          // Read maintainer.json
+          const maintainerPath = path.join(repoPath, 'maintainer.json');
+          const maintainerInfo = this._validateMaintainerInfo(
+            await this._readJsonFile(maintainerPath),
+            repoPath
+          );
 
-        // Process docker templates
-        const dockerPath = path.join(repoPath, 'docker');
-        if (await this._exists(dockerPath)) {
-          const dockerFiles = await fs.readdir(dockerPath);
-          for (const file of dockerFiles) {
-            if (file.endsWith('.json')) {
-              const template = await this._processDockerTemplate(
-                path.join(dockerPath, file),
+          // Process docker templates
+          const dockerPath = path.join(repoPath, 'docker');
+          if (await this._exists(dockerPath)) {
+            const dockerFiles = await fs.readdir(dockerPath);
+            for (const file of dockerFiles) {
+              if (file.endsWith('.json')) {
+                const template = await this._processDockerTemplate(
+                  path.join(dockerPath, file),
+                  maintainerInfo,
+                  repoPath
+                );
+                if (template) templates.push(template);
+              }
+            }
+          }
+
+          // Process compose templates
+          const composePath = path.join(repoPath, 'compose');
+          if (await this._exists(composePath)) {
+            const composeDirs = await fs.readdir(composePath);
+            for (const dir of composeDirs) {
+              const templateDir = path.join(composePath, dir);
+              const dirStat = await fs.stat(templateDir);
+              if (!dirStat.isDirectory()) continue;
+
+              const template = await this._processComposeTemplate(
+                templateDir,
                 maintainerInfo,
                 repoPath
               );
               if (template) templates.push(template);
             }
           }
-        }
 
-        // Process compose templates
-        const composePath = path.join(repoPath, 'compose');
-        if (await this._exists(composePath)) {
-          const composeDirs = await fs.readdir(composePath);
-          for (const dir of composeDirs) {
-            const templateDir = path.join(composePath, dir);
-            const dirStat = await fs.stat(templateDir);
-            if (!dirStat.isDirectory()) continue;
-
-            const template = await this._processComposeTemplate(
-              templateDir,
-              maintainerInfo,
-              repoPath
-            );
-            if (template) templates.push(template);
-          }
-        }
-
-        // Process plugin templates
-        const pluginsPath = path.join(repoPath, 'plugins');
-        if (await this._exists(pluginsPath)) {
-          const pluginFiles = await fs.readdir(pluginsPath);
-          for (const file of pluginFiles) {
-            if (file.endsWith('.json')) {
-              const template = await this._processPluginTemplate(
-                path.join(pluginsPath, file),
-                maintainerInfo,
-                repoPath
-              );
-              if (template) templates.push(template);
+          // Process plugin templates
+          const pluginsPath = path.join(repoPath, 'plugins');
+          if (await this._exists(pluginsPath)) {
+            const pluginFiles = await fs.readdir(pluginsPath);
+            for (const file of pluginFiles) {
+              if (file.endsWith('.json')) {
+                const template = await this._processPluginTemplate(
+                  path.join(pluginsPath, file),
+                  maintainerInfo,
+                  repoPath
+                );
+                if (template) templates.push(template);
+              }
             }
           }
+        } catch (error) {
+          console.error(`Hub: repo ${owner}/${repo} could not be indexed (${error.message}), skipping`);
         }
       }
     }
@@ -1310,9 +1424,9 @@ class HubService {
     // Filter by search term (name, maintainer, description)
     if (searchLower) {
       filtered = filtered.filter(t => {
-        const name = (t.name || '').toLowerCase();
-        const maintainer = (t.maintainer || '').toLowerCase();
-        const description = (t.description || '').toLowerCase();
+        const name = this._lc(t.name);
+        const maintainer = this._lc(t.maintainer);
+        const description = this._lc(t.description);
 
         return name.includes(searchLower) ||
                maintainer.includes(searchLower) ||
@@ -1324,7 +1438,7 @@ class HubService {
     if (categoryLower) {
       filtered = filtered.filter(t => {
         if (!Array.isArray(t.category)) return false;
-        return t.category.some(c => c.toLowerCase().includes(categoryLower));
+        return t.category.some(c => this._lc(c).includes(categoryLower));
       });
     }
 
@@ -1335,8 +1449,8 @@ class HubService {
 
         switch (sort) {
           case 'name':
-            valA = (a.name || '').toLowerCase();
-            valB = (b.name || '').toLowerCase();
+            valA = this._lc(a.name);
+            valB = this._lc(b.name);
             if (order === 'desc') {
               return valB.localeCompare(valA);
             }
@@ -1415,8 +1529,13 @@ class HubService {
       throw new Error('Failed to read template');
     }
 
+    const invalidField = this._findInvalidField(template);
+    if (invalidField) {
+      throw new Error(`Invalid template: field "${invalidField}" has the wrong type`);
+    }
+
     // Normalize container name: replace spaces with underscores
-    if (template.name && template.name.includes(' ')) {
+    if (typeof template.name === 'string' && template.name.includes(' ')) {
       template.name = template.name.replace(/ /g, '_');
     }
 
@@ -1571,6 +1690,11 @@ class HubService {
     const template = await this._readJsonFile(templatePath);
     if (!template) {
       throw new Error('Failed to read template');
+    }
+
+    const invalidField = this._findInvalidField(template);
+    if (invalidField) {
+      throw new Error(`Invalid template: field "${invalidField}" has the wrong type`);
     }
 
     return template;

@@ -1276,8 +1276,21 @@ class MosService {
     const errors = [];
 
     for (const [fieldName, dirPath] of Object.entries(pathsToCheck)) {
-      if (!dirPath || typeof dirPath !== 'string') {
-        continue; // Skip empty/invalid paths
+      if (typeof dirPath !== 'string' || dirPath.trim() === '') {
+        const check = {
+          isOnPool: false,
+          isValid: false,
+          error: 'No path configured',
+          suggestion: 'Use a path like /mnt/poolname/service-directory or /var/mergerfs/poolname/disk1/service-directory'
+        };
+        results[fieldName] = check;
+        errors.push({
+          field: fieldName,
+          path: dirPath,
+          error: check.error,
+          suggestion: check.suggestion
+        });
+        continue;
       }
 
       const check = await this._checkDirectoryMountStatus(dirPath, serviceType, fieldName);
@@ -1298,6 +1311,24 @@ class MosService {
       results,
       errors
     };
+  }
+
+  /**
+   * Throws if a service is about to be enabled while required paths are unset
+   * @param {string} serviceLabel - Label used in the error message (Docker, LXC, VM)
+   * @param {Object} requiredPaths - Object with paths {fieldName: path}
+   */
+  _assertRequiredServicePaths(serviceLabel, requiredPaths) {
+    const missing = Object.entries(requiredPaths)
+      .filter(([, dirPath]) => typeof dirPath !== 'string' || dirPath.trim() === '')
+      .map(([fieldName]) => fieldName);
+
+    if (missing.length > 0) {
+      throw new Error(
+        `${serviceLabel} cannot be enabled without configured paths. Missing: ${missing.join(', ')}. ` +
+        'Set a path on a pool mountpoint (/mnt/poolname/...) or a MergerFS disk (/var/mergerfs/poolname/diskN/...) first.'
+      );
+    }
   }
 
   /**
@@ -1407,26 +1438,25 @@ class MosService {
         : current.enabled === true;
 
       if (willBeEnabled) {
-        // Validate the effective paths (not just the changed ones)
-        const pathsToCheck = {};
-        const effectiveDirectory = updates.directory || current.directory;
-        const effectiveAppdata = updates.appdata || current.appdata;
-        if (effectiveDirectory) {
-          pathsToCheck.directory = effectiveDirectory;
-        }
-        if (effectiveAppdata) {
-          pathsToCheck.appdata = effectiveAppdata;
-        }
+        // Compare against the values that will be written, so a cleared path is not masked by the stored one
+        const effectiveDirectory = updates.directory !== undefined ? updates.directory : current.directory;
+        const effectiveAppdata = updates.appdata !== undefined ? updates.appdata : current.appdata;
 
-        if (Object.keys(pathsToCheck).length > 0) {
-          const directoryCheck = await this._checkMultipleDirectories(pathsToCheck, 'docker');
+        this._assertRequiredServicePaths('Docker', {
+          directory: effectiveDirectory,
+          appdata: effectiveAppdata
+        });
 
-          if (directoryCheck.hasErrors) {
-            const errorDetails = directoryCheck.errors.map(error =>
-              `${error.field}: ${error.error}${error.suggestion ? ' ' + error.suggestion : ''}`
-            ).join('; ');
-            throw new Error(`Docker directory conflict: ${errorDetails}`);
-          }
+        const directoryCheck = await this._checkMultipleDirectories(
+          { directory: effectiveDirectory, appdata: effectiveAppdata },
+          'docker'
+        );
+
+        if (directoryCheck.hasErrors) {
+          const errorDetails = directoryCheck.errors.map(error =>
+            `${error.field}: ${error.error}${error.suggestion ? ' ' + error.suggestion : ''}`
+          ).join('; ');
+          throw new Error(`Docker directory conflict: ${errorDetails}`);
         }
       }
 
@@ -1693,8 +1723,17 @@ class MosService {
       // Always validate 'directory' to catch legacy nonraid/mergerfs paths
       // Use updates.directory if provided, otherwise fall back to current.directory
       // This ensures validation runs even when only 'enabled: true' is sent
+      const willBeEnabled = updates.enabled !== undefined
+        ? updates.enabled === true
+        : current.enabled === true;
+
       const pathsToCheck = {};
-      const effectiveDirectory = updates.directory || current.directory;
+      const effectiveDirectory = updates.directory !== undefined ? updates.directory : current.directory;
+
+      if (willBeEnabled) {
+        this._assertRequiredServicePaths('LXC', { directory: effectiveDirectory });
+      }
+
       if (effectiveDirectory) {
         pathsToCheck.directory = effectiveDirectory;
       }
@@ -1952,8 +1991,21 @@ class MosService {
       // Always validate 'directory' to catch legacy nonraid/mergerfs paths
       // Use updates.directory if provided, otherwise fall back to current.directory
       // This ensures validation runs even when only 'enabled: true' is sent
+      const willBeEnabled = updates.enabled !== undefined
+        ? updates.enabled === true
+        : current.enabled === true;
+
       const pathsToCheck = {};
-      const effectiveDirectory = updates.directory || current.directory;
+      const effectiveDirectory = updates.directory !== undefined ? updates.directory : current.directory;
+      const effectiveVdiskDirectory = updates.vdisk_directory !== undefined ? updates.vdisk_directory : current.vdisk_directory;
+
+      if (willBeEnabled) {
+        this._assertRequiredServicePaths('VM', {
+          directory: effectiveDirectory,
+          vdisk_directory: effectiveVdiskDirectory
+        });
+      }
+
       if (effectiveDirectory) {
         pathsToCheck.directory = effectiveDirectory;
       }
@@ -4640,40 +4692,6 @@ class MosService {
     // Filter out right/ timezones
     const filteredResult = result.filter(tz => !tz.startsWith('right/'));
     return filteredResult.sort();
-  }
-
-  /**
-   * Public method to check directory mount status
-   * @param {string|Object} directoryPaths - Single path or object with paths {fieldName: path}
-   * @returns {Promise<Object>} Check result
-   */
-  async checkDirectoryMountStatus(directoryPaths) {
-    try {
-      if (typeof directoryPaths === 'string') {
-        // Einzelner Pfad
-        const result = await this._checkDirectoryMountStatus(directoryPaths);
-        return {
-          path: directoryPaths,
-          ...result
-        };
-      } else if (typeof directoryPaths === 'object') {
-        // Mehrere Pfade
-        const result = await this._checkMultipleDirectories(directoryPaths);
-        return {
-          hasErrors: result.hasErrors,
-          directories: Object.keys(directoryPaths).map(fieldName => ({
-            field: fieldName,
-            path: directoryPaths[fieldName],
-            ...result.results[fieldName]
-          })),
-          errors: result.errors
-        };
-      } else {
-        throw new Error('directoryPaths must be a string or object');
-      }
-    } catch (error) {
-      throw new Error(`Error checking directory mount status: ${error.message}`);
-    }
   }
 
   /**
