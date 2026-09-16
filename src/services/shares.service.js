@@ -9,6 +9,12 @@ class SharesService {
   constructor() {
     this.sharesConfigPath = '/boot/config/shares.json';
     this.poolsConfigPath = '/boot/config/pools.json';
+
+    // Ownership applied to newly created share directories
+    this.defaultOwnership = {
+      uid: 500,
+      gid: 500
+    };
   }
 
   /**
@@ -424,12 +430,48 @@ class SharesService {
   }
 
   /**
+   * Ensure a share directory exists.
+   *
+   * Ownership and permissions are only applied to directories created here.
+   * Pre-existing directories are left untouched because they are often shared
+   * with other services that rely on their current uid/gid and mode.
+   *
+   * @param {string} sharePath - Directory to ensure
+   * @returns {Promise<void>}
+   */
+  async _ensureShareDirectory(sharePath) {
+    let firstCreatedPath;
+    try {
+      // Returns undefined when nothing had to be created
+      firstCreatedPath = await fs.mkdir(sharePath, { recursive: true });
+    } catch (error) {
+      throw new Error(`Could not create share directory ${sharePath}: ${error.message}`);
+    }
+
+    if (firstCreatedPath === undefined) {
+      return;
+    }
+
+    const { uid, gid } = this.defaultOwnership;
+    try {
+      await execAsync(`chown ${uid}:${gid} "${sharePath}"`);
+    } catch (chownError) {
+      console.warn(`Could not set ownership for ${sharePath}: ${chownError.message}`);
+    }
+
+    try {
+      await execAsync(`chmod 0775 "${sharePath}"`);
+    } catch (chmodError) {
+      console.warn(`Could not set permissions for ${sharePath}: ${chmodError.message}`);
+    }
+  }
+
+  /**
    * Create a new SMB share with optional disk slot specification for MergerFS pools
    * @param {string} shareName - Name of the share
    * @param {string|null} poolName - Name of the pool (or null for absolute paths)
    * @param {string} subPath - Sub-path within the pool OR absolute path if poolName is null
    * @param {Object} options - Share configuration options
-   * @param {string} options.permissions - Directory permissions in octal format (default: '0775')
    * @returns {Promise<Object>} Created share configuration
    */
   async createSmbShare(shareName, poolName, subPath = '', options = {}) {
@@ -520,26 +562,7 @@ class SharesService {
 
         // Check if the share path already exists or should be created (default behavior)
         if (options.createDirectory !== false && (!poolConfig || poolConfig.type !== 'mergerfs' || !options.target_devices)) {
-          try {
-            await fs.mkdir(sharePath, { recursive: true });
-
-            // Set ownership to 500:500 (user:group)
-            try {
-              await execAsync(`chown 500:500 "${sharePath}"`);
-            } catch (chownError) {
-              // Do nothing
-            }
-
-            // Set permissions (default: 0775 = rwxrwxr-x)
-            const permissions = options.permissions || '0775';
-            try {
-              await execAsync(`chmod ${permissions} "${sharePath}"`);
-            } catch (chmodError) {
-              // Do nothing
-            }
-          } catch (error) {
-            throw new Error(`Could not create share directory ${sharePath}: ${error.message}`);
-          }
+          await this._ensureShareDirectory(sharePath);
         } else if (options.createDirectory === false) {
           // Check if path exists
           try {
@@ -630,7 +653,6 @@ class SharesService {
    * @param {string|null} poolName - Name of the pool (or null for absolute paths)
    * @param {string} subPath - Sub-path within the pool OR absolute path if poolName is null
    * @param {Object} options - Share configuration options
-   * @param {string} options.permissions - Directory permissions in octal format (default: '0775')
    * @returns {Promise<Object>} Created share configuration
    */
   async createNfsShare(shareName, poolName, subPath = '', options = {}) {
@@ -721,26 +743,7 @@ class SharesService {
 
         // Check if the share path already exists or should be created (default behavior)
         if (options.createDirectory !== false && (!poolConfig || poolConfig.type !== 'mergerfs' || !options.target_devices)) {
-          try {
-            await fs.mkdir(sharePath, { recursive: true });
-
-            // Set ownership to 500:500 (user:group)
-            try {
-              await execAsync(`chown 500:500 "${sharePath}"`);
-            } catch (chownError) {
-              // Do nothing
-            }
-
-            // Set permissions (default: 0775 = rwxrwxr-x)
-            const permissions = options.permissions || '0775';
-            try {
-              await execAsync(`chmod ${permissions} "${sharePath}"`);
-            } catch (chmodError) {
-              // Do nothing
-            }
-          } catch (error) {
-            throw new Error(`Could not create share directory ${sharePath}: ${error.message}`);
-          }
+          await this._ensureShareDirectory(sharePath);
         } else if (options.createDirectory === false) {
           // Check if path exists
           try {
@@ -1402,14 +1405,16 @@ class SharesService {
         // Check if disk mount point exists
         await fs.access(diskPath);
 
+        let created = false;
         if (createDirectories) {
-          // Create directory
-          await fs.mkdir(fullPath, { recursive: true });
+          // Returns undefined when nothing had to be created
+          created = (await fs.mkdir(fullPath, { recursive: true })) !== undefined;
 
-          // Set ownership to 500:500 (user:group)
-          if (setOwnership) {
+          // Only touch ownership of directories we created ourselves
+          if (setOwnership && created) {
+            const { uid, gid } = this.defaultOwnership;
             try {
-              await execAsync(`chown 500:500 "${fullPath}"`);
+              await execAsync(`chown ${uid}:${gid} "${fullPath}"`);
             } catch (chownError) {
               console.warn(`Could not set ownership for ${fullPath}: ${chownError.message}`);
             }
@@ -1419,7 +1424,7 @@ class SharesService {
         results[slot] = {
           success: true,
           path: fullPath,
-          created: createDirectories,
+          created,
           diskPath
         };
       } catch (error) {
