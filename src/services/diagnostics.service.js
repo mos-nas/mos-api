@@ -63,6 +63,8 @@ const collectors = [
   { type: 'file', source: '/boot/config/system/iscsi/target.json', target: 'config/system/iscsi/target.json' },
   { type: 'file', source: '/boot/config/system/lxc/default.conf', target: 'config/system/lxc/default.conf' },
   { type: 'file', source: '/boot/config/system/nut.json', target: 'config/system/nut.json' },
+  { type: 'file', source: '/boot/config/system/samba/global_extra.conf', target: 'config/system/samba/global_extra.conf' },
+  { type: 'file', source: '/boot/config/system/samba/shares_extra.conf', target: 'config/system/samba/shares_extra.conf' },
   { type: 'file', source: '/etc/nut/nut.conf', target: 'config/system/nut/nut.conf' },
   { type: 'file', source: '/etc/nut/ups.conf', target: 'config/system/nut/ups.conf' },
   { type: 'file', source: '/etc/nut/upsd.conf', target: 'config/system/nut/upsd.conf' },

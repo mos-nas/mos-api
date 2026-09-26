@@ -87,24 +87,13 @@ class SwapService {
    * @returns {Promise<Object>} RAID info
    */
   async checkBtrfsRaidProfile(mountPoint) {
-    try {
-      const { stdout } = await execPromise(`btrfs filesystem df "${mountPoint}" 2>/dev/null | grep -i "^Data"`);
-      // Format: "Data, RAID1: total=10.00GiB, used=5.00GiB" or "Data, single: total=..."
-      const match = stdout.match(/Data,\s*(\w+):/i);
-      if (match) {
-        const profile = match[1].toLowerCase();
-        const isRaid = ['raid0', 'raid1', 'raid5', 'raid6', 'raid10', 'raid1c3', 'raid1c4'].includes(profile);
-        return {
-          profile,
-          isRaid,
-          allowed: !isRaid // Swapfile only allowed on single/dup profile
-        };
-      }
-      return { profile: 'unknown', isRaid: false, allowed: true };
-    } catch (error) {
-      // If command fails, assume it's not BTRFS or no RAID
-      return { profile: 'unknown', isRaid: false, allowed: true };
-    }
+    const profile = (await new PoolsService().getBtrfsRaidProfile(mountPoint)) || 'unknown';
+    const isRaid = ['raid0', 'raid1', 'raid5', 'raid6', 'raid10', 'raid1c3', 'raid1c4'].includes(profile);
+    return {
+      profile,
+      isRaid,
+      allowed: !isRaid // Swapfile only allowed on single/dup profile
+    };
   }
 
   /**
@@ -233,6 +222,12 @@ class SwapService {
       // Check for MergerFS - swapfiles are not supported on MergerFS pools
       if (fsInfo.filesystem === 'fuse.mergerfs' || fsInfo.filesystem === 'mergerfs') {
         result.error = `Swapfiles are not supported on MergerFS pools. Use a direct disk path under /var/mergerfs/${poolInfo.poolName}/diskN/ instead.`;
+        return result;
+      }
+
+      // bcachefs has no swapfile support in the kernel
+      if (fsInfo.filesystem === 'bcachefs') {
+        result.error = `Swapfiles are not supported on bcachefs pools. Use a swap partition or ZRAM instead.`;
         return result;
       }
 

@@ -161,10 +161,21 @@ class LuksDeviceStrategy extends DeviceStrategy {
       }
     }
 
+    // Encrypting a new member with a key the rest of the pool does not know would only fail
+    // on the next mount, so the passphrase is checked against an existing member up front
+    if (!isCreatingNewPool && options.format !== false) {
+      await this.poolsService._assertLuksPassphraseMatchesPool(pool, passphrase, devices);
+    }
+
     try {
       for (let i = 0; i < devices.length; i++) {
         const device = devices[i];
-        const slot = options.startSlot ? options.startSlot + i : (i + 1);
+
+        // Explicit slots win: free slots are not necessarily contiguous, so deriving them
+        // from startSlot + index would hand out a slot that is still in use
+        const slot = Array.isArray(options.slots) && options.slots[i] !== undefined
+          ? parseInt(options.slots[i])
+          : (options.startSlot ? options.startSlot + i : (i + 1));
 
         // Check if device is already LUKS
         const deviceInfo = await this.poolsService.checkDeviceFilesystem(device);
@@ -178,7 +189,7 @@ class LuksDeviceStrategy extends DeviceStrategy {
         if (isAlreadyLuks && options.format === false) {
           // Device is already LUKS - open it without reformatting
           console.log(`Device ${device} is already LUKS encrypted, opening...`);
-          const luksDevices = await this._openLuksDevicesWithSlots(
+          const luksDevices = await this.poolsService._openLuksDevicesWithSlots(
             [device],
             poolName,
             [slot],
@@ -199,11 +210,12 @@ class LuksDeviceStrategy extends DeviceStrategy {
             device,
             poolName,
             passphrase,
-            options.config?.create_keyfile && i === 0 // Only create keyfile for first device
+            options.config?.create_keyfile && i === 0, // Only create keyfile for first device
+            Array.isArray(options.luksUuids) ? options.luksUuids[i] : null
           );
 
           // Open the encrypted device
-          const luksDevices = await this._openLuksDevicesWithSlots(
+          const luksDevices = await this.poolsService._openLuksDevicesWithSlots(
             [device],
             poolName,
             [slot],
@@ -288,8 +300,15 @@ class LuksDeviceStrategy extends DeviceStrategy {
    * Setup LUKS encryption on a single device
    * @private
    */
-  async _setupDeviceEncryption(device, poolName, passphrase, createKeyfile = false) {
+  async _setupDeviceEncryption(device, poolName, passphrase, createKeyfile = false, luksUuid = null) {
     const keyfilePath = path.join(this.luksKeyDir, `${poolName}.key`);
+    const cleanPassphrase = this.poolsService._normalizeLuksPassphrase(passphrase);
+
+    // NonRAID needs the container UUID before the array is started, so it is pinned here
+    if (luksUuid && !/^[0-9a-fA-F-]{36}$/.test(luksUuid)) {
+      throw new Error(`Invalid LUKS UUID '${luksUuid}' for device ${device}`);
+    }
+    const uuidArgs = luksUuid ? ['--uuid', luksUuid] : [];
 
     try {
       // Create keyfile if requested and it doesn't already exist
@@ -303,50 +322,39 @@ class LuksDeviceStrategy extends DeviceStrategy {
         } catch (error) {
           // Keyfile doesn't exist, create it
           const crypto = require('crypto');
-          const randomBytes = crypto.randomBytes(32);
-          const base64Key = randomBytes.toString('base64').replace(/\n/g, '');
-          await fs.writeFile(keyfilePath, base64Key, 'utf8');
-          await execPromise(`chmod 600 ${keyfilePath}`);
+          const base64Key = crypto.randomBytes(32).toString('base64');
+          await fs.writeFile(keyfilePath, base64Key, { mode: 0o600 });
           console.log(`Created new keyfile for pool '${poolName}' at ${keyfilePath}`);
         }
       }
 
-      // Check if keyfile exists to decide whether to use it for formatting
-      let useKeyfileForFormat = false;
-      try {
-        await fs.access(keyfilePath);
-        useKeyfileForFormat = true;
-      } catch (error) {
-        useKeyfileForFormat = false;
+      const hasKeyfile = await fs.access(keyfilePath).then(() => true, () => false);
+
+      if (!hasKeyfile && !cleanPassphrase) {
+        throw new Error(`No keyfile found at ${keyfilePath} and no passphrase provided`);
       }
 
-      // Format device with LUKS
       console.log(`Formatting ${device} with LUKS encryption...`);
-      if (useKeyfileForFormat) {
-        // Use keyfile for formatting (for adding to existing encrypted pool)
-        console.log(`Using keyfile for LUKS format on ${device}`);
-        await execPromise(`cryptsetup luksFormat --type luks2 ${device} --key-file ${keyfilePath}`);
-      } else {
-        // Use passphrase for formatting (for new encrypted pool)
+
+      // Format with the passphrase whenever there is one, then add the keyfile as a second
+      // keyslot. Both have to unlock the device: the keyfile drives automount, the passphrase
+      // is the only way back in once /boot is gone.
+      if (cleanPassphrase) {
         await this.poolsService._execCryptsetupWithPassphrase(
-          ['luksFormat', '--type', 'luks2', device],
-          passphrase
+          ['luksFormat', '--type', 'luks2', ...uuidArgs, device],
+          cleanPassphrase
         );
 
-        // Add keyfile to device if it was just created
-        if (createKeyfile) {
-          try {
-            await fs.access(keyfilePath);
-            console.log(`Adding keyfile to LUKS device ${device}...`);
-            await this.poolsService._execCryptsetupWithPassphrase(
-              ['luksAddKey', device, keyfilePath],
-              passphrase
-            );
-            console.log(`Keyfile added to ${device}`);
-          } catch (error) {
-            console.warn(`Warning: Could not add keyfile to device ${device}: ${error.message}`);
-          }
+        if (hasKeyfile) {
+          console.log(`Adding keyfile to LUKS device ${device}...`);
+          await this.poolsService._execCryptsetupWithPassphrase(
+            ['luksAddKey', device, keyfilePath],
+            cleanPassphrase
+          );
         }
+      } else {
+        console.log(`Using keyfile for LUKS format on ${device}`);
+        await execPromise(`cryptsetup luksFormat --type luks2 ${uuidArgs.join(' ')} ${device} --key-file ${keyfilePath}`.replace(/\s+/g, ' '));
       }
 
       console.log(`LUKS encryption setup completed for ${device}`);
@@ -355,103 +363,6 @@ class LuksDeviceStrategy extends DeviceStrategy {
     }
   }
 
-  /**
-   * Open LUKS devices with slot-based naming
-   * @private
-   */
-  async _openLuksDevicesWithSlots(devices, poolName, slots, passphrase = null, isParity = false) {
-    const keyfilePath = path.join(this.luksKeyDir, `${poolName}.key`);
-    const mappedDevices = [];
-    let useKeyfile = false;
-
-    // Check if keyfile exists
-    try {
-      await fs.access(keyfilePath);
-      useKeyfile = true;
-      console.log(`Using keyfile for LUKS devices: ${keyfilePath}`);
-    } catch (error) {
-      if (!passphrase) {
-        throw new Error(`No keyfile found at ${keyfilePath} and no passphrase provided`);
-      }
-      console.log(`No keyfile found, using passphrase for LUKS devices`);
-    }
-
-    for (let i = 0; i < devices.length; i++) {
-      const device = devices[i];
-      const slot = slots[i];
-
-      // Use slot-based naming scheme
-      let luksName;
-      if (isParity) {
-        luksName = `parity_${poolName}_${slot}`;
-      } else {
-        luksName = `${poolName}_${slot}`;
-      }
-
-      try {
-        // Open LUKS device
-        if (useKeyfile) {
-          await execPromise(`cryptsetup luksOpen ${device} ${luksName} --key-file ${keyfilePath}`);
-        } else {
-          await this.poolsService._execCryptsetupWithPassphrase(
-            ['luksOpen', device, luksName],
-            passphrase
-          );
-        }
-
-        const mappedDevicePath = `/dev/mapper/${luksName}`;
-        console.log(`Opened LUKS device: ${device} -> ${mappedDevicePath}`);
-
-        mappedDevices.push({
-          originalDevice: device,
-          mappedDevice: mappedDevicePath,
-          slot: slot
-        });
-      } catch (error) {
-        // Cleanup already opened devices
-        for (const opened of mappedDevices) {
-          try {
-            const name = opened.mappedDevice.replace('/dev/mapper/', '');
-            await execPromise(`cryptsetup luksClose ${name}`);
-          } catch (cleanupError) {
-            console.warn(`Warning: Could not close ${opened.mappedDevice}: ${cleanupError.message}`);
-          }
-        }
-        throw new Error(`Failed to open LUKS device ${device}: ${error.message}`);
-      }
-    }
-
-    return mappedDevices;
-  }
-
-  /**
-   * Cleanup existing LUKS mappers for a pool name
-   * @private
-   */
-  async _cleanupExistingLuksMappers(poolName) {
-    try {
-      const { stdout } = await execPromise('ls /dev/mapper/ 2>/dev/null || echo ""');
-      const mappers = stdout.trim().split('\n').filter(m =>
-        m.includes(poolName) && (m.startsWith(poolName + '_') || m.startsWith('parity_' + poolName))
-      );
-
-      for (const mapper of mappers) {
-        try {
-          await execPromise(`cryptsetup luksClose ${mapper}`);
-          console.log(`Cleaned up existing LUKS mapper: ${mapper}`);
-        } catch (error) {
-          try {
-            await execPromise(`dmsetup remove ${mapper}`);
-            console.log(`Force removed existing LUKS mapper: ${mapper}`);
-          } catch (dmError) {
-            console.warn(`Warning: Could not remove mapper ${mapper}: ${dmError.message}`);
-          }
-        }
-      }
-    } catch (error) {
-      console.warn(`Warning: Could not cleanup existing LUKS mappers: ${error.message}`);
-    }
-  }
 }
 
 /**

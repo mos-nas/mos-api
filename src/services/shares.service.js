@@ -1651,4 +1651,4 @@ class SharesService {
   }
 }
 
-module.exports = new SharesService(); 
+module.exports = new SharesService();

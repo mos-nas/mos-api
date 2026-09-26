@@ -1141,9 +1141,28 @@ class DisksService {
    */
   /**
    * Get all UUIDs that belong to a device by reading /dev/disk/by-uuid/ symlinks
+   * PARTUUIDs are collected too because pool types whose members share one filesystem UUID
+   * (bcachefs) are identified by partition UUID instead
    */
   async _getDeviceUuidsBySymlinks(device) {
     const uuids = [];
+
+    try {
+      const partuuidDir = '/dev/disk/by-partuuid';
+      for (const partuuid of await fs.readdir(partuuidDir)) {
+        try {
+          const realPath = await fs.realpath(path.join(partuuidDir, partuuid));
+          if (realPath.startsWith(device)) {
+            uuids.push(partuuid);
+          }
+        } catch (error) {
+          // Broken symlink, skip
+        }
+      }
+    } catch (error) {
+      // No partuuid directory (no partitioned devices)
+    }
+
     try {
       // Read all UUID symlinks
       const uuidDir = '/dev/disk/by-uuid';

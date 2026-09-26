@@ -49,6 +49,12 @@ router.use('/vpools', require('./vpools.routes'));
  *           type: string
  *           description: Pool comment
  *           example: "My data pool"
+ *         raid_level:
+ *           type: string
+ *           nullable: true
+ *           description: Live BTRFS data profile, read from the mounted filesystem. Null for single-device pools, non-BTRFS pools and unmounted pools
+ *           enum: [null, single, dup, raid0, raid1, raid10, raid1c3, raid1c4, raid5, raid6]
+ *           example: "raid1"
  *         data_devices:
  *           type: array
  *           description: Data devices in the pool
@@ -339,7 +345,7 @@ router.get('/', authenticateToken, async (req, res) => {
   *               type: array
   *               items:
   *                 type: string
-  *               example: ["single", "multi", "mergerfs", "nonraid"]
+  *               example: ["single", "multi", "mergerfs", "nonraid", "bcachefs"]
   *       401:
   *         description: Not authenticated
   *         content:
@@ -1368,6 +1374,193 @@ router.post('/mergerfs', checkRole(['admin']), async (req, res) => {
       devices,
       filesystem,
       { ...poolOptions, format: format, skip_size_check: skip_size_check === true }
+    );
+
+    return res.status(201).json(result);
+  } catch (error) {
+    console.error(error);
+    return res.status(400).json({ error: error.message });
+  }
+});
+
+/**
+ * @swagger
+ * /pools/bcachefs:
+ *   post:
+ *     summary: Create bcachefs pool
+ *     description: |
+ *       Creates a bcachefs pool. bcachefs is a native multi-device filesystem, so redundancy is
+ *       a configuration property instead of a dedicated parity disk and parity_devices stays empty.
+ *
+ *       Redundancy maps to RAID levels as follows:
+ *       - `data_replicas: 1` - striping without redundancy (RAID 0)
+ *       - `data_replicas: 2` - mirroring (RAID 1/10)
+ *       - `data_replicas: 2` + `erasure_code: true` - single parity (RAID 5)
+ *       - `data_replicas: 3` + `erasure_code: true` - double parity (RAID 6)
+ *
+ *       Cache devices are passed separately and get the `ssd` device group, data devices get `hdd`.
+ *       Requires the bcachefs kernel module from the mos-bcachefs plugin.
+ *     tags: [Pools]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *               - devices
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 description: Name for the new pool
+ *                 example: "tank"
+ *               devices:
+ *                 type: array
+ *                 description: Data device paths (device group 'hdd')
+ *                 items:
+ *                   type: string
+ *                 example: ["/dev/sdb", "/dev/sdc", "/dev/sdd"]
+ *               cache_devices:
+ *                 type: array
+ *                 description: Optional cache device paths (device group 'ssd')
+ *                 items:
+ *                   type: string
+ *                 example: ["/dev/nvme0n1"]
+ *               format:
+ *                 type: boolean
+ *                 description: Whether to format the devices (false imports an existing filesystem)
+ *                 example: true
+ *               config:
+ *                 type: object
+ *                 properties:
+ *                   encrypted:
+ *                     type: boolean
+ *                     description: Enable LUKS encryption below bcachefs
+ *                     default: false
+ *                     example: false
+ *                   create_keyfile:
+ *                     type: boolean
+ *                     description: Create keyfile for automatic mounting
+ *                     default: false
+ *                     example: false
+ *                   data_replicas:
+ *                     type: integer
+ *                     description: Number of data replicas, capped at 3 with erasure coding
+ *                     default: 1
+ *                     example: 2
+ *                   metadata_replicas:
+ *                     type: integer
+ *                     description: Number of metadata replicas, never erasure coded
+ *                     example: 2
+ *                   erasure_code:
+ *                     type: boolean
+ *                     description: Use Reed-Solomon parity instead of full replicas
+ *                     default: false
+ *                     example: true
+ *                   compression:
+ *                     type: string
+ *                     enum: [none, lz4, gzip, zstd]
+ *                     default: none
+ *                     example: lz4
+ *                   background_compression:
+ *                     type: string
+ *                     enum: [none, lz4, gzip, zstd]
+ *                     default: none
+ *                     example: zstd
+ *                   cache_mode:
+ *                     type: string
+ *                     description: Only applied when cache_devices are given
+ *                     enum: [writeback, writethrough, writearound]
+ *                     default: writethrough
+ *                     example: writethrough
+ *                   shared:
+ *                     type: boolean
+ *                     description: Make the mount point shared for bind mount propagation
+ *                     default: false
+ *                     example: false
+ *               passphrase:
+ *                 type: string
+ *                 description: Encryption passphrase (required if encrypted=true)
+ *                 example: "my_secure_password"
+ *               options:
+ *                 type: object
+ *                 properties:
+ *                   automount:
+ *                     type: boolean
+ *                     description: Whether to automatically mount the pool
+ *                     default: false
+ *                     example: true
+ *                   comment:
+ *                     type: string
+ *                     description: Optional comment for the pool
+ *                     example: "My bcachefs pool"
+ *     responses:
+ *       201:
+ *         description: Pool created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Successfully created bcachefs pool 'tank' with 3 data device(s) and 1 cache device(s)"
+ *                 pool:
+ *                   type: object
+ *                   description: Created pool object
+ *       400:
+ *         description: Bad request or bcachefs kernel module unavailable
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       403:
+ *         description: Admin permission required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+// Create bcachefs pool (admin only)
+router.post('/bcachefs', checkRole(['admin']), async (req, res) => {
+  try {
+    const {
+      name,
+      devices,
+      cache_devices = [],
+      format,
+      options = {},
+      config = {},
+      passphrase
+    } = req.body;
+
+    if (!name) {
+      return res.status(400).json({ error: 'Pool name is required' });
+    }
+
+    if (!Array.isArray(devices) || devices.length === 0) {
+      return res.status(400).json({ error: 'At least one device is required' });
+    }
+
+    // Prepare pool options
+    const poolOptions = { ...options };
+    if (config && Object.keys(config).length > 0) {
+      poolOptions.config = config;
+    }
+    if (config.encrypted) {
+      poolOptions.passphrase = passphrase || '';
+    }
+
+    const result = await poolsService.createBcachefsPool(
+      name,
+      devices,
+      { ...poolOptions, cache_devices, format: format }
     );
 
     return res.status(201).json(result);
