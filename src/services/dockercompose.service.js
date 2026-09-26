@@ -504,9 +504,10 @@ class DockerComposeService {
   /**
    * Get detailed container info for a stack (container name, image, local sha)
    * @param {string} stackName - Stack name
+   * @param {Object} existingServices - Previously stored services, used to keep known remote SHAs
    * @returns {Promise<Object>} Object with service details
    */
-  async _getStackContainerDetails(stackName) {
+  async _getStackContainerDetails(stackName, existingServices = {}) {
     try {
       const containerNames = await this._getStackContainers(stackName);
       const services = {};
@@ -518,17 +519,7 @@ class DockerComposeService {
             `docker inspect --format='{{.Config.Image}}' ${containerName}`
           );
           const image = imageStdout.trim();
-
-          // Get local SHA from installed image
-          let localSha = null;
-          try {
-            const { stdout: shaStdout } = await execPromise(
-              `docker image inspect "${image}" --format '{{index .RepoDigests 0}}' | cut -d '@' -f2-`
-            );
-            localSha = shaStdout.trim() || null;
-          } catch (shaErr) {
-            console.warn(`Failed to get local SHA for image ${image}: ${shaErr.message}`);
-          }
+          const localDigests = await this._getImageDigests(image);
 
           // Extract service name from container name
           // Format is usually: compose_stackname-servicename-1 (from working dir)
@@ -549,11 +540,19 @@ class DockerComposeService {
             }
           }
 
+          const knownRemote = existingServices[serviceName] ? existingServices[serviceName].remote : null;
+
+          // Prefer the digest the update check reported instead of an arbitrary list entry
+          let localSha = localDigests[0] || null;
+          if (knownRemote && localDigests.includes(knownRemote)) {
+            localSha = knownRemote;
+          }
+
           services[serviceName] = {
             container: containerName,
             repo: image,
             local: localSha,
-            remote: localSha // Same as local on create (image was just pulled)
+            remote: knownRemote || localSha
           };
         } catch (err) {
           console.warn(`Failed to get details for container ${containerName}: ${err.message}`);
@@ -567,6 +566,26 @@ class DockerComposeService {
   }
 
   /**
+   * Get all digests a local image is known under, limited to its own repository
+   * @param {string} image - Image reference
+   * @returns {Promise<string[]>} Digests (sha256:...)
+   */
+  async _getImageDigests(image) {
+    try {
+      const { stdout } = await execPromise(
+        `docker image inspect "${image}" --format '{{range .RepoDigests}}{{println .}}{{end}}'`
+      );
+      const repo = image.replace(/@sha256:[a-f0-9]+$/, '').replace(/:[^:/]+$/, '');
+      const entries = stdout.split('\n').map(line => line.trim()).filter(Boolean);
+      const own = entries.filter(entry => entry.startsWith(`${repo}@`));
+      return (own.length > 0 ? own : entries).map(entry => entry.split('@')[1]).filter(Boolean);
+    } catch (error) {
+      console.warn(`Failed to get digests for image ${image}: ${error.message}`);
+      return [];
+    }
+  }
+
+  /**
    * Update or add a stack in compose-containers file
    * @param {string} stackName - Stack name
    * @param {boolean|null} autostart - Autostart setting (null to preserve existing)
@@ -576,24 +595,19 @@ class DockerComposeService {
   async _updateStackInComposeContainers(stackName, autostart = null, webui = null, noAutoupdate = null) {
     try {
       const composeContainers = await this._readComposeContainers();
-      const services = await this._getStackContainerDetails(stackName);
 
       // Find existing stack entry
       const existingIndex = composeContainers.findIndex(s => s.stack === stackName);
+      const services = await this._getStackContainerDetails(
+        stackName,
+        existingIndex !== -1 ? (composeContainers[existingIndex].services || {}) : {}
+      );
 
-      // Preserve existing remote SHAs, autostart, webui and no_autoupdate if available
+      // Preserve existing autostart, webui and no_autoupdate if available
       let existingAutostart = false; // Default to false
       let existingWebui = null; // Default to null
       let existingNoAutoupdate = false; // Default to false
       if (existingIndex !== -1) {
-        if (composeContainers[existingIndex].services) {
-          const existingServices = composeContainers[existingIndex].services;
-          for (const [serviceName, serviceData] of Object.entries(services)) {
-            if (existingServices[serviceName] && existingServices[serviceName].remote) {
-              serviceData.remote = existingServices[serviceName].remote;
-            }
-          }
-        }
         // Preserve existing autostart if not explicitly set
         if (composeContainers[existingIndex].autostart !== undefined) {
           existingAutostart = composeContainers[existingIndex].autostart;
@@ -632,8 +646,7 @@ class DockerComposeService {
   }
 
   /**
-   * Sync local SHAs to remote SHAs after successful upgrade
-   * This simply copies the remote SHA value to local for each service
+   * Re-read local SHAs after an upgrade, keeping the remote SHAs from the last update check
    * @param {string} stackName - Stack name
    * @returns {Promise<void>}
    */
@@ -652,9 +665,11 @@ class DockerComposeService {
         return;
       }
 
-      // Get actual current SHAs from running containers
-      // After upgrade, local and remote are the same (we just pulled latest)
-      const services = await this._getStackContainerDetails(stackName);
+      // Keep the known remote SHAs so a pull that changed nothing stays visible
+      const services = await this._getStackContainerDetails(
+        stackName,
+        composeContainers[existingIndex].services || {}
+      );
       composeContainers[existingIndex].services = services;
 
       await this._writeComposeContainers(composeContainers);
