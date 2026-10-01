@@ -1312,14 +1312,21 @@ router.post('/nfs', checkRole(['admin']), async (req, res) => {
     }
 
     // Validation of NFS-specific parameters
-    if (write_operations && !['sync', 'async'].includes(write_operations)) {
+    if (typeof source !== 'string' || source.trim() === '' || /\s/.test(source.trim())) {
+      return res.status(400).json({
+        success: false,
+        error: 'source is required and must be a single host, network or wildcard (e.g. 192.168.1.0/24 or *)'
+      });
+    }
+
+    if (!['sync', 'async'].includes(write_operations)) {
       return res.status(400).json({
         success: false,
         error: 'write_operations must be either "sync" or "async"'
       });
     }
 
-    if (mapping && !['root_squash', 'no_root_squash', 'all_squash'].includes(mapping)) {
+    if (!['root_squash', 'no_root_squash', 'all_squash'].includes(mapping)) {
       return res.status(400).json({
         success: false,
         error: 'mapping must be one of: root_squash, no_root_squash, all_squash'
@@ -2147,14 +2154,22 @@ router.put('/nfs/:shareId', checkRole(['admin']), async (req, res) => {
     }
 
     // Validation of NFS-specific parameters (if updated)
-    if (updates.write_operations && !['sync', 'async'].includes(updates.write_operations)) {
+    if (updates.source !== undefined &&
+        (typeof updates.source !== 'string' || updates.source.trim() === '' || /\s/.test(updates.source.trim()))) {
+      return res.status(400).json({
+        success: false,
+        error: 'source is required and must be a single host, network or wildcard (e.g. 192.168.1.0/24 or *)'
+      });
+    }
+
+    if (updates.write_operations !== undefined && !['sync', 'async'].includes(updates.write_operations)) {
       return res.status(400).json({
         success: false,
         error: 'write_operations must be either "sync" or "async"'
       });
     }
 
-    if (updates.mapping && !['root_squash', 'no_root_squash', 'all_squash'].includes(updates.mapping)) {
+    if (updates.mapping !== undefined && !['root_squash', 'no_root_squash', 'all_squash'].includes(updates.mapping)) {
       return res.status(400).json({
         success: false,
         error: 'mapping must be one of: root_squash, no_root_squash, all_squash'
