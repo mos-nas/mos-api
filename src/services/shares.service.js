@@ -426,7 +426,35 @@ class SharesService {
       secure
     };
 
-    return shareConfig;
+    return this._normalizeNfsShareConfig(shareConfig);
+  }
+
+  // Empty values end up in /etc/exports as "path (" or ",," and break exportfs
+  _normalizeNfsShareConfig(config) {
+    const source = String(config.source ?? '').trim();
+    if (!source) {
+      throw new Error('NFS source (host) must not be empty, use "*" for all hosts');
+    }
+
+    const normalized = { ...config, source };
+    for (const key of ['anonuid', 'anongid']) {
+      const value = normalized[key];
+      if (value === '' || value === undefined || value === null) {
+        normalized[key] = null;
+      } else if (/^\d+$/.test(String(value).trim())) {
+        normalized[key] = parseInt(value, 10);
+      } else {
+        throw new Error(`${key} must be a non-negative integer`);
+      }
+    }
+    if (!normalized.write_operations) {
+      normalized.write_operations = 'sync';
+    }
+    if (!normalized.mapping) {
+      normalized.mapping = 'root_squash';
+    }
+
+    return normalized;
   }
 
   /**
@@ -1032,12 +1060,16 @@ class SharesService {
       const originalShare = section[shareType][shareIndex];
 
       // Update share configuration
-      const updatedShareConfig = {
+      let updatedShareConfig = {
         ...originalShare,
         ...updates,
         id: originalShare.id, // ID cannot be changed
         name: originalShare.name // Name cannot be changed in ID-based updates
       };
+
+      if (shareType === 'nfs') {
+        updatedShareConfig = this._normalizeNfsShareConfig(updatedShareConfig);
+      }
 
       // Check if target_devices was updated and update path_rule accordingly
       if (updates.hasOwnProperty('target_devices')) {

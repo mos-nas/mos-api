@@ -113,6 +113,25 @@ class BcachefsHelpers {
   }
 
   /**
+   * Validate that the members left after a removal can still carry the pool configuration
+   * @param {Object} config - Pool config
+   * @param {Object[]} remaining - Remaining data_devices entries with group and durability
+   * @throws {Error} If the removal would break redundancy or the cache targets
+   */
+  static validateRemainingMembers(config, remaining) {
+    if (!remaining.some(d => d.group === DATA_GROUP)) {
+      throw new Error('At least one data device must remain in the pool');
+    }
+
+    // Targets are set at format time and keep pointing at the cache label
+    if (config.cache_mode && !remaining.some(d => d.group === CACHE_GROUP)) {
+      throw new Error('The last cache device cannot be removed while a cache mode is configured. Replace it instead.');
+    }
+
+    return BcachefsHelpers.validateConfig(config, remaining);
+  }
+
+  /**
    * Assign group, slot and durability to the prepared devices of a new pool
    * Expects data devices first, cache devices second - slots continue across both so they
    * line up with the LUKS mapper names the device strategy created from startSlot 1

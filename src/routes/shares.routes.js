@@ -3,6 +3,9 @@ const router = express.Router();
 const { checkRole } = require('../middleware/auth.middleware');
 const sharesService = require('../services/shares.service');
 
+const isValidNfsAnonId = value =>
+  value === undefined || value === null || value === '' || /^\d+$/.test(String(value).trim());
+
 /**
  * @swagger
  * tags:
@@ -1333,6 +1336,20 @@ router.post('/nfs', checkRole(['admin']), async (req, res) => {
       });
     }
 
+    if (!String(source ?? '').trim()) {
+      return res.status(400).json({
+        success: false,
+        error: 'source must not be empty, use "*" for all hosts'
+      });
+    }
+
+    if (!isValidNfsAnonId(anonuid) || !isValidNfsAnonId(anongid)) {
+      return res.status(400).json({
+        success: false,
+        error: 'anonuid and anongid must be non-negative integers'
+      });
+    }
+
     // Validation of source address (simple check)
     if (source && source !== '*' && !/^[\d\.\/\:\*a-fA-F]+$/.test(source)) {
       return res.status(400).json({
@@ -2143,6 +2160,20 @@ router.put('/nfs/:shareId', checkRole(['admin']), async (req, res) => {
       return res.status(400).json({
         success: false,
         error: 'Update data is required'
+      });
+    }
+
+    if (updates.source !== undefined && !String(updates.source ?? '').trim()) {
+      return res.status(400).json({
+        success: false,
+        error: 'source must not be empty, use "*" for all hosts'
+      });
+    }
+
+    if (!isValidNfsAnonId(updates.anonuid) || !isValidNfsAnonId(updates.anongid)) {
+      return res.status(400).json({
+        success: false,
+        error: 'anonuid and anongid must be non-negative integers'
       });
     }
 

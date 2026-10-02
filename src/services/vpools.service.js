@@ -154,10 +154,7 @@ class VpoolsService {
     // Create the mount point
     await fs.mkdir(mountPoint, { recursive: true });
 
-    // Build and run the mergerfs command (options match regular MergerFS pools)
-    const createPolicy = vpool.config?.policies?.create || 'mspmfs';
-    const searchPolicy = vpool.config?.policies?.search || 'ff';
-    const mergerfsOptions = `defaults,allow_other,use_ino,cache.files=off,dropcacheonclose=true,category.create=${createPolicy},category.search=${searchPolicy}`;
+    const mergerfsOptions = poolsService._buildMergerfsOptions(vpool.config);
     const mergerfsCommand = `mergerfs ${sourcePaths.join(':')} ${mountPoint} -o ${mergerfsOptions}`;
     await execPromise(mergerfsCommand);
 

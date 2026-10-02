@@ -1296,11 +1296,33 @@ router.post('/multi', checkRole(['admin']), async (req, res) => {
  *                     type: string
  *                     description: Optional comment for the pool
  *                     example: "My MergerFS pool"
+ *                   policies:
+ *                     type: object
+ *                     properties:
+ *                       create:
+ *                         type: string
+ *                         description: MergerFS create policy
+ *                         default: mspmfs
+ *                         example: mspmfs
+ *                       search:
+ *                         type: string
+ *                         description: MergerFS search policy
+ *                         default: ff
+ *                         example: ff
+ *                   minfreespace:
+ *                     type: string
+ *                     description: Minimum free space per branch before create policies skip it (stored in pool config)
+ *                     default: "20G"
+ *                     example: "20G"
+ *                   moveonenospc:
+ *                     type: boolean
+ *                     description: Move file to another branch when a write fails with ENOSPC (stored in pool config)
+ *                     default: true
+ *                     example: true
  *                   mergerfsOptions:
  *                     type: string
- *                     description: MergerFS mount options
- *                     default: "defaults,allow_other,direct_io=auto,moveonenospc=true,category.create=mfs,minfree=5G"
- *                     example: "defaults,allow_other,direct_io=auto"
+ *                     description: Raw MergerFS mount options, overrides the options built from the pool config for the initial mount only (not persisted)
+ *                     example: "defaults,allow_other,use_ino,category.create=mfs,minfreespace=5G"
  *               skip_size_check:
  *                 type: boolean
  *                 description: Skip the parity device size validation (SnapRAID normally requires parity >= largest data device)
@@ -1431,7 +1453,7 @@ router.post('/mergerfs', checkRole(['admin']), async (req, res) => {
  *                 example: ["/dev/nvme0n1"]
  *               format:
  *                 type: boolean
- *                 description: Whether to format the devices (false imports an existing filesystem)
+ *                 description: Whether to format the devices. false imports an existing bcachefs filesystem, every member must already sit on a partition
  *                 example: true
  *               config:
  *                 type: object
@@ -1674,6 +1696,16 @@ router.post('/bcachefs', checkRole(['admin']), async (req, res) => {
  *                         description: MergerFS search policy
  *                         default: ff
  *                         example: ff
+ *                   minfreespace:
+ *                     type: string
+ *                     description: Minimum free space per branch before create policies skip it (stored in pool config)
+ *                     default: "20G"
+ *                     example: "20G"
+ *                   moveonenospc:
+ *                     type: boolean
+ *                     description: Move file to another branch when a write fails with ENOSPC (stored in pool config)
+ *                     default: true
+ *                     example: true
  *     responses:
  *       201:
  *         description: Pool created successfully
@@ -1965,8 +1997,12 @@ router.post('/nonraid/replace', checkRole(['admin']), async (req, res) => {
  *
  *       **Important:**
  *       - Pool must be unmounted before adding device
- *       - Parity check runs automatically unless parity_valid is true
- *       - Passphrase required for encrypted pools
+ *       - With parity and format: true the disk is cleared (zeroed) in the background first, then formatted
+ *         and added to the pool. The array stays usable; notifications are sent on start and when the disk is ready
+ *       - format: false runs a parity check unless parity_valid is true
+ *       - parity_valid: true skips clearing/check (disk must already be zeroed)
+ *       - Passphrase required for encrypted pools without keyfile
+ *       - Adding, replacing or adding parity is rejected until a new disk is cleared, formatted and ready
  *
  *       **Size Requirements:**
  *       - New data device must be <= smallest parity device
@@ -1998,11 +2034,11 @@ router.post('/nonraid/replace', checkRole(['admin']), async (req, res) => {
  *                 example: xfs
  *               passphrase:
  *                 type: string
- *                 description: Encryption passphrase (required for encrypted pools)
+ *                 description: Encryption passphrase (required for encrypted pools without keyfile)
  *                 example: "my_secure_password"
  *               parity_valid:
  *                 type: boolean
- *                 description: If true, skip parity check (parity is already valid)
+ *                 description: If true, skip clearing and parity check (disk is already zeroed / parity is valid)
  *                 default: false
  *                 example: false
  *     responses:
@@ -2389,8 +2425,14 @@ router.delete('/:id', checkRole(['admin']), async (req, res) => {
  *                 example: ["/dev/sdd", "/dev/sde"]
  *               format:
  *                 type: boolean
- *                 description: Whether to format the devices
+ *                 description: Whether to format the devices. Must be true for bcachefs pools
  *                 example: true
+ *               group:
+ *                 type: string
+ *                 enum: [hdd, ssd]
+ *                 default: hdd
+ *                 description: bcachefs only - device group, hdd adds data capacity, ssd adds cache
+ *                 example: hdd
  *     responses:
  *       200:
  *         description: Devices added successfully
@@ -2416,7 +2458,7 @@ router.delete('/:id', checkRole(['admin']), async (req, res) => {
 router.post('/:id/devices', checkRole(['admin']), async (req, res) => {
   try {
     const { id } = req.params;
-    const { devices, format } = req.body;
+    const { devices, format, group } = req.body;
 
     if (!Array.isArray(devices) || devices.length === 0) {
       return res.status(400).json({ error: 'At least one device is required' });
@@ -2431,7 +2473,7 @@ router.post('/:id/devices', checkRole(['admin']), async (req, res) => {
     }
 
     // Get the appropriate service and add devices
-    const result = await poolsService.addDevicesToPool(id, devices, { format });
+    const result = await poolsService.addDevicesToPool(id, devices, { format, group });
 
     res.json(result);
   } catch (error) {
@@ -2847,8 +2889,16 @@ router.post('/:id/parity/remove', checkRole(['admin']), async (req, res) => {
  * @swagger
  * /pools/{id}/devices/remove:
  *   post:
- *     summary: Remove devices from an existing MergerFS pool
- *     description: Remove one or more devices from an existing MergerFS pool (admin only). Will update SnapRAID config if pool has SnapRAID configured.
+ *     summary: Remove devices from an existing pool
+ *     description: |
+ *       Remove one or more devices from an existing MergerFS, BTRFS or bcachefs pool (admin only).
+ *       Will update SnapRAID config if pool has SnapRAID configured.
+ *
+ *       **bcachefs:** The pool must be mounted. Data is evacuated onto the remaining devices before
+ *       removal, which can take hours on large devices, so it runs in the background and notifications
+ *       are sent on start and completion. The remaining devices must still satisfy data_replicas/erasure
+ *       coding, and the last cache device cannot be removed while a cache mode is configured.
+ *       Only one device operation per bcachefs pool can run at a time.
  *     tags: [Pools]
  *     security:
  *       - bearerAuth: []
@@ -2974,6 +3024,10 @@ router.post('/:id/devices/remove', checkRole(['admin']), async (req, res) => {
  *       - Devices will be mounted individually and added to the MergerFS union
  *       - Will format devices if needed and update SnapRAID config if pool has SnapRAID configured
  *       - Pool will be remounted automatically after device addition
+ *
+ *       **bcachefs Pools:**
+ *       - Devices join the mounted filesystem online, `format` must be true
+ *       - `group` selects data (hdd) or cache (ssd), cache durability follows the pool's cache mode
  *     tags: [Pools]
  *     security:
  *       - bearerAuth: []
@@ -3001,9 +3055,18 @@ router.post('/:id/devices/remove', checkRole(['admin']), async (req, res) => {
  *                 example: ["/dev/sdd", "/dev/sde"]
  *               format:
  *                 type: boolean
- *                 description: Whether to force format the devices before adding
+ *                 description: Whether to force format the devices before adding. Must be true for bcachefs pools
  *                 default: false
  *                 example: false
+ *               passphrase:
+ *                 type: string
+ *                 description: Passphrase for encrypted pools
+ *               group:
+ *                 type: string
+ *                 enum: [hdd, ssd]
+ *                 default: hdd
+ *                 description: bcachefs only - device group, hdd adds data capacity, ssd adds cache
+ *                 example: hdd
  *     responses:
  *       200:
  *         description: Devices added successfully
@@ -3052,6 +3115,85 @@ router.post('/:id/devices/remove', checkRole(['admin']), async (req, res) => {
  *               $ref: '#/components/schemas/Error'
  */
 
+/**
+ * @swagger
+ * /pools/{id}/devices/replace:
+ *   post:
+ *     summary: Replace a device in a pool
+ *     description: |
+ *       Replace a data device of a BTRFS, MergerFS or bcachefs pool (admin only).
+ *
+ *       **bcachefs Pools:**
+ *       - The pool must be mounted and `format` must be true
+ *       - The new device joins first in the group of the old one, then the old device is evacuated and removed,
+ *         so redundancy never drops during the replacement
+ *       - The old device must still be reachable, evacuation can take hours on large devices and runs in
+ *         the background, notifications are sent on start and completion
+ *     tags: [Pools]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Pool ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - oldDevice
+ *               - newDevice
+ *             properties:
+ *               oldDevice:
+ *                 type: string
+ *                 description: Device path of the member to replace
+ *                 example: "/dev/sdb1"
+ *               newDevice:
+ *                 type: string
+ *                 description: Device path of the replacement
+ *                 example: "/dev/sdd"
+ *               format:
+ *                 type: boolean
+ *                 description: Whether to format the new device. Must be true for bcachefs pools
+ *                 default: false
+ *                 example: true
+ *               passphrase:
+ *                 type: string
+ *                 description: Passphrase for encrypted pools
+ *     responses:
+ *       200:
+ *         description: Device replaced successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "/dev/sdd was added to bcachefs pool 'data', /dev/sdb1 is evacuated and removed in the background"
+ *                 pool:
+ *                   $ref: '#/components/schemas/Pool'
+ *       404:
+ *         description: Pool not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Replacement failed
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
 // Replace device in pool (admin only)
 router.post('/:id/devices/replace', checkRole(['admin']), async (req, res) => {
   try {
@@ -3080,7 +3222,7 @@ router.post('/:id/devices/replace', checkRole(['admin']), async (req, res) => {
 // Add devices to an existing pool (admin only)
 router.post('/:id/devices/add', checkRole(['admin']), async (req, res) => {
   try {
-    const { devices, format = false, passphrase } = req.body;
+    const { devices, format = false, passphrase, group } = req.body;
 
     if (!Array.isArray(devices) || devices.length === 0) {
       return res.status(400).json({ error: 'At least one device is required' });
@@ -3095,7 +3237,7 @@ router.post('/:id/devices/add', checkRole(['admin']), async (req, res) => {
     }
 
     // Get the appropriate service and add devices
-    const result = await poolsService.addDevicesToPool(req.params.id, devices, { format, passphrase });
+    const result = await poolsService.addDevicesToPool(req.params.id, devices, { format, passphrase, group });
 
     res.json(result);
   } catch (error) {
@@ -3550,6 +3692,141 @@ router.post('/:id/btrfs/balance', checkRole(['admin']), async (req, res) => {
       user: req.user,
       raidLevel
     });
+    res.json(result);
+  } catch (error) {
+    console.error(error);
+    if (error.message.includes('not found')) {
+      return res.status(404).json({ error: error.message });
+    }
+    if (error.message.includes('only supported for') ||
+        error.message.includes('not mounted') ||
+        error.message.includes('already running') ||
+        error.message.includes('No') ||
+        error.message.includes('Invalid operation')) {
+      return res.status(400).json({ error: error.message });
+    }
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @swagger
+ * /pools/{id}/bcachefs/scrub:
+ *   post:
+ *     summary: Execute bcachefs scrub operation
+ *     description: |
+ *       Scrub operations for bcachefs pools only. A scrub verifies all data checksums and repairs
+ *       from redundant copies where possible; affected paths are logged to dmesg.
+ *
+ *       **Operations:**
+ *       - `start`: Start a new scrub (fails if one is already running)
+ *       - `status`: Get current scrub status and progress
+ *       - `cancel`: Stop a running scrub (bcachefs has no pause)
+ *     tags: [Pools]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: id
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Pool ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - operation
+ *             properties:
+ *               operation:
+ *                 type: string
+ *                 description: Operation to execute
+ *                 enum: [start, status, cancel]
+ *                 example: "start"
+ *     responses:
+ *       200:
+ *         description: bcachefs scrub operation executed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "bcachefs scrub started"
+ *                 operation:
+ *                   type: string
+ *                   example: "start"
+ *                 poolName:
+ *                   type: string
+ *                   example: "data"
+ *                 running:
+ *                   type: boolean
+ *                   description: Present only for status operation
+ *                   example: true
+ *                 progress:
+ *                   type: object
+ *                   nullable: true
+ *                   description: Present only for status operation when running
+ *                   properties:
+ *                     status:
+ *                       type: string
+ *                       example: "running"
+ *                     percent:
+ *                       type: number
+ *                       nullable: true
+ *                       description: null when the scrub was not started by the API (e.g. after an unclean shutdown)
+ *                       example: 45.5
+ *                 timestamp:
+ *                   type: string
+ *                   example: "2026-09-30T12:34:56.789Z"
+ *       400:
+ *         description: Invalid request parameters or operation requirements not met
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 error:
+ *                   type: string
+ *                   examples:
+ *                     wrong_type:
+ *                       value: "Scrub is only supported for bcachefs pools, not 'btrfs'"
+ *                     not_mounted:
+ *                       value: "bcachefs pool is not mounted. Please mount the pool first."
+ *                     already_running:
+ *                       value: "A scrub operation is already running. Use cancel to stop it first."
+ *                     not_running:
+ *                       value: "No scrub operation is currently running"
+ *                     invalid_operation:
+ *                       value: "Invalid operation. Supported operations: start, status, cancel"
+ *       404:
+ *         description: Pool not found
+ *       500:
+ *         description: Internal server error
+ */
+router.post('/:id/bcachefs/scrub', checkRole(['admin']), async (req, res) => {
+  try {
+    const { operation } = req.body;
+
+    if (!operation) {
+      return res.status(400).json({ error: 'Operation is required' });
+    }
+
+    const pools = await poolsService.listPools({}, req.user);
+    const pool = pools.find(p => p.id === req.params.id);
+
+    if (!pool) {
+      return res.status(404).json({ error: `Pool with ID "${req.params.id}" not found` });
+    }
+
+    const result = await poolsService.executeBcachefsScrubOperation(req.params.id, operation, { user: req.user });
     res.json(result);
   } catch (error) {
     console.error(error);
