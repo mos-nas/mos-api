@@ -1853,6 +1853,11 @@ router.post('/nonraid', checkRole(['admin']), async (req, res) => {
  *                       type: string
  *                       description: Path to new device
  *                       example: "/dev/sdg"
+ *                     type:
+ *                       type: string
+ *                       enum: [data, parity]
+ *                       description: Slot type, needed to replace parity slot 1/2 while a data slot with the same number exists (default data)
+ *                       example: "data"
  *                 example:
  *                   - slot: "2"
  *                     newDevice: "/dev/sdg"
@@ -1997,6 +2002,8 @@ router.post('/nonraid/replace', checkRole(['admin']), async (req, res) => {
  *
  *       **Important:**
  *       - Pool must be unmounted before adding device
+ *       - Not possible while a parity operation (check, clear, rebuild) is running
+ *       - Pool is mounted automatically after the device was added
  *       - With parity and format: true the disk is cleared (zeroed) in the background first, then formatted
  *         and added to the pool. The array stays usable; notifications are sent on start and when the disk is ready
  *       - format: false runs a parity check unless parity_valid is true
@@ -2104,6 +2111,8 @@ router.post('/nonraid/adddevice', checkRole(['admin']), async (req, res) => {
  *
  *       **Important:**
  *       - Pool must be unmounted before adding parity
+ *       - Not possible while a parity operation (check, clear, rebuild) is running
+ *       - Pool is mounted automatically after the parity was added
  *       - Maximum 2 parity devices allowed
  *       - Parity check ALWAYS runs when adding parity
  *       - Parity device is NOT formatted
@@ -2126,6 +2135,9 @@ router.post('/nonraid/adddevice', checkRole(['admin']), async (req, res) => {
  *                 type: string
  *                 description: Path to new parity device (whole disk, not partition)
  *                 example: "/dev/sdg"
+ *               passphrase:
+ *                 type: string
+ *                 description: Passphrase for encrypted pools without keyfile (needed for the mount)
  *     responses:
  *       200:
  *         description: Parity device added successfully
@@ -2155,13 +2167,13 @@ router.post('/nonraid/adddevice', checkRole(['admin']), async (req, res) => {
  */
 router.post('/nonraid/addparity', checkRole(['admin']), async (req, res) => {
   try {
-    const { device } = req.body;
+    const { device, passphrase } = req.body;
 
     if (!device) {
       return res.status(400).json({ error: 'device path is required' });
     }
 
-    const result = await poolsService.addParityDeviceToNonRaidPool(device);
+    const result = await poolsService.addParityDeviceToNonRaidPool(device, { passphrase });
 
     res.json(result);
   } catch (error) {

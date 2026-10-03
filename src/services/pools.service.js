@@ -1638,6 +1638,9 @@ class PoolsService {
       // Check if an operation is running
       const isRunning = await this._isNonRaidParityOperationRunning();
       if (!isRunning) {
+        const pools = await this._readPools();
+        await this._growNonRaidFilesystems(pools.find(p => p.type === 'nonraid'))
+          .catch(err => console.warn(`Growing NonRAID filesystems failed: ${err.message}`));
         return;
       }
 
@@ -1767,6 +1770,9 @@ class PoolsService {
 
         this._finalizePendingNonRaidDisks()
           .catch(err => console.warn(`Finalizing pending NonRAID disks failed: ${err.message}`));
+        this._readPools()
+          .then(pools => this._growNonRaidFilesystems(pools.find(p => p.type === 'nonraid')))
+          .catch(err => console.warn(`Growing NonRAID filesystems failed: ${err.message}`));
       }
     } catch (error) {
       console.warn(`NonRAID completion check failed: ${error.message}`);
@@ -3792,7 +3798,7 @@ class PoolsService {
     };
 
     // lsblk reads the udev database and does not wake disks from standby
-    const ids = new Set(pool.data_devices.map(d => d.id));
+    const ids = new Set(pool.data_devices.map(d => d.partuuid || d.id));
     const { stdout } = await execPromise('lsblk -Ppno NAME,UUID,PARTUUID');
     for (const line of stdout.split('\n')) {
       const [, name, uuid, partuuid] = line.match(/^NAME="([^"]*)" UUID="([^"]*)" PARTUUID="([^"]*)"/) || [];
@@ -4447,11 +4453,9 @@ class PoolsService {
       // This is a whole disk - create partition table and partition first
       console.log(`${device} is a whole disk, creating partition table and partition...`);
 
-      // Wipe all existing filesystem signatures from the disk and all partitions
-      // This ensures no old signatures (from e.g. sda1, sda2, sda3) remain
+      // Partitions first: wiping the disk drops the table and the kernel forgets the partitions,
+      // so an old signature at the same offset would reappear in the new partition
       try {
-        await execPromise(`wipefs -a ${device}`);
-        // Also wipe signatures from any existing partitions before destroying the table
         const existingPartitions = await this._getDevicePartitions(device);
         for (const part of existingPartitions) {
           try {
@@ -4460,6 +4464,7 @@ class PoolsService {
             // Partition may already be gone or inaccessible - that's fine
           }
         }
+        await execPromise(`wipefs -a ${device}`);
       } catch (e) {
         console.warn(`wipefs warning: ${e.message}`);
       }
@@ -5043,8 +5048,8 @@ class PoolsService {
       // Ensure device paths are available before mounting
       await this._ensureDevicePaths(pool);
 
-      // Handle LUKS encryption before mounting
-      if (pool.config?.encrypted) {
+      // NonRAID opens LUKS on the md devices itself, opening the raw partition would bypass parity
+      if (pool.config?.encrypted && pool.type !== 'nonraid') {
         console.log(`Opening LUKS devices for encrypted pool '${pool.name}'`);
 
         // Use the device path resolved from UUID
@@ -5463,7 +5468,11 @@ class PoolsService {
       // Refresh device map (unmounted pool disks should no longer trigger alerts)
       this._refreshUdevDeviceMap().catch(() => {});
 
-      return result;
+      return {
+        success: true,
+        message: `Pool "${pool.name}" unmounted successfully`,
+        ...(result || {})
+      };
     } catch (error) {
       throw new Error(`Error unmounting pool: ${error.message}`);
     }
@@ -5824,6 +5833,8 @@ class PoolsService {
         try {
           await execPromise('modprobe -r md-nonraid');
           console.log('md-nonraid module unloaded');
+          // Writes through /dev/nmd* (rebuild, LUKS, mkfs) left the udev database of the partitions stale
+          await this._refreshDeviceSymlinks();
         } catch (error) {
           unmountErrors.push(`Unload module: ${error.message}`);
           if (!force) {
@@ -6300,7 +6311,7 @@ class PoolsService {
     // Inject real device paths into data devices (for API display)
     for (const device of pool.data_devices || []) {
       if (device.id) {
-        device.device = await this.getRealDevicePathFromUuid(device.id);
+        device.device = await this.getRealDevicePathFromUuid(device.partuuid || device.id);
       }
     }
 
@@ -6317,35 +6328,22 @@ class PoolsService {
   }
 
   /**
-   * Check if NonRAID parity is valid (all disks OK or NP)
+   * Check if NonRAID parity is valid (all configured slots OK or NP)
+   * Unused slots are skipped, an empty second parity slot reports DISK_NP_DSBL
+   * @param {Object} pool - NonRAID pool
    * @returns {Promise<boolean>} - True if parity is valid
    * @private
    */
-  async _getNonRaidParityValid() {
-    try {
-      // Check if /proc/nmdstat exists
-      await fs.access('/proc/nmdstat');
+  async _getNonRaidParityValid(pool) {
+    const nmdstat = await this._readNmdstat();
+    if (!nmdstat) return false;
 
-      // Read /proc/nmdstat and parse all disk statuses
-      const { stdout } = await execPromise('cat /proc/nmdstat');
+    const slots = [
+      ...pool.data_devices.map(d => parseInt(d.slot)),
+      ...(pool.parity_devices || []).map(d => (parseInt(d.slot) === 1 ? 0 : 29))
+    ];
 
-      // Find all rdevStatus entries
-      const statusMatches = stdout.matchAll(/rdevStatus\.(\d+)=(\w+)/g);
-
-      for (const match of statusMatches) {
-        const status = match[2];
-        // Valid statuses: DISK_OK or DISK_NP (not present)
-        // Invalid statuses: DISK_INVALID, DISK_WRONG, DISK_DSBL_NEW, etc.
-        if (status !== 'DISK_OK' && status !== 'DISK_NP') {
-          return false;
-        }
-      }
-
-      return true;
-    } catch (error) {
-      // If we can't read the status, assume invalid
-      return false;
-    }
+    return slots.every(slot => ['DISK_OK', 'DISK_NP'].includes(nmdstat[`rdevStatus.${slot}`]));
   }
 
   /**
@@ -6402,8 +6400,7 @@ class PoolsService {
         return;
       }
 
-      // Check parity validity (all disks OK or NP)
-      pool.status.parity_valid = await this._getNonRaidParityValid();
+      pool.status.parity_valid = await this._getNonRaidParityValid(pool);
 
       // Read /proc/nmdstat and parse all values
       const { stdout } = await execPromise('cat /proc/nmdstat');
@@ -9022,6 +9019,112 @@ class PoolsService {
     return mdState;
   }
 
+  // Unmounting cancels the running operation, which would leave the parity unfinished
+  async _assertNoNonRaidParityOperation(pool) {
+    if (!await this._isNonRaidParityOperationRunning()) return;
+    const operation = (await this._readNmdstat())?.mdResyncAction || 'parity operation';
+    throw new Error(`A ${operation} is running on pool ${pool.name}. Please wait until it is finished or cancel it before changing devices.`);
+  }
+
+  // A replaced old disk keeps the UUID of its slot and with a single data disk the P parity mirrors it,
+  // so a slot is resolved by its partuuid (set on replace) or by an unambiguous non-parity UUID match
+  async _resolveNonRaidDataDevice(pool, device) {
+    if (device.partuuid) return this.getRealDevicePathFromUuid(device.partuuid);
+
+    const parityDisks = new Set();
+    for (const parity of pool.parity_devices || []) {
+      parityDisks.add(await this._realPathOrSelf(`/dev/disk/by-id/${parity.id}`));
+    }
+    const isParity = name => parityDisks.has(name) || parityDisks.has(PoolHelpers.getBaseDiskFromPartition(name));
+
+    const { stdout } = await execPromise('lsblk -Ppno NAME,UUID,PARTUUID');
+    const candidates = [];
+    for (const line of stdout.split('\n')) {
+      const [, name, uuid, partuuid] = line.match(/^NAME="([^"]*)" UUID="([^"]*)" PARTUUID="([^"]*)"/) || [];
+      if (!name || /^\/dev\/(nmd|mapper\/|dm-)/.test(name) || isParity(name)) continue;
+      if (uuid === device.id || partuuid === device.id) candidates.push(name);
+    }
+    if (candidates.length > 1) {
+      throw new Error(`Slot ${device.slot}: ${device.id} was found on ${candidates.join(', ')}. Please remove or wipe the replaced old disk.`);
+    }
+    if (candidates.length === 1) return candidates[0];
+
+    const resolved = await this.getRealDevicePathFromUuid(device.id);
+    return resolved && !isParity(resolved) ? resolved : null;
+  }
+
+  // Writes through /dev/nmd* (LUKS header, rebuild) emit no udev event for the physical partition
+  async _refreshNonRaidDeviceSymlinks(pool) {
+    for (const device of pool.data_devices || []) {
+      if (!await this.getRealDevicePathFromUuid(device.partuuid || device.id)) {
+        await this._refreshDeviceSymlinks();
+        return;
+      }
+    }
+  }
+
+  // A rebuild onto a larger disk restores the old filesystem size, the grow has to wait until the
+  // rebuild is done because it writes beyond the previously used area
+  async _growNonRaidFilesystems(pool) {
+    if (!pool || await this._isNonRaidParityOperationRunning()) return;
+
+    for (const device of pool.data_devices || []) {
+      const mountPoint = path.join(this.mergerfsBasePath, pool.name, `disk${device.slot}`);
+      if (!await this._isMounted(mountPoint)) continue;
+
+      const filesystem = device.filesystem || 'xfs';
+      let cmd = null;
+      if (filesystem === 'xfs') {
+        cmd = `xfs_growfs ${mountPoint}`;
+      } else if (filesystem === 'btrfs') {
+        cmd = `btrfs filesystem resize max ${mountPoint}`;
+      } else if (filesystem.startsWith('ext')) {
+        cmd = `resize2fs "$(findmnt -no SOURCE ${mountPoint})"`;
+      }
+      if (!cmd) continue;
+
+      try {
+        const before = (await this.getDeviceSpace(mountPoint)).totalSpace;
+        await execPromise(cmd);
+        const after = (await this.getDeviceSpace(mountPoint)).totalSpace;
+        if (after > before) {
+          console.log(`Grew ${filesystem} on ${mountPoint} from ${before} to ${after} bytes`);
+          sendNotification('nonraid', `Filesystem of disk${device.slot} in Pool ${pool.name} was expanded to the new disk size`, 'normal')
+            .catch(err => console.warn(`Failed to send NonRAID notification: ${err.message}`));
+        }
+      } catch (error) {
+        console.warn(`Could not grow ${filesystem} on ${mountPoint}: ${error.message}`);
+      }
+    }
+  }
+
+  // Only sends "check CORRECT" if the driver did not start the resync on its own after the start
+  async _startNonRaidResync(poolName) {
+    let running = false;
+    for (let attempt = 0; attempt < 3 && !running; attempt++) {
+      running = await this._isNonRaidParityOperationRunning();
+      if (!running) await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    if (!running) {
+      console.log('NonRAID resync did not start on its own, sending check CORRECT');
+      if (!await this._startNonRaidParityCheck()) return false;
+    }
+    const operation = (await this._readNmdstat())?.mdResyncAction || 'check CORRECT';
+    this._startNonRaidMonitor(poolName, operation, true);
+    return true;
+  }
+
+  // The device change is committed to the superblock already, so a failed mount must not stop the array
+  async _mountNonRaidPoolAfterDeviceChange(pool, passphrase = null) {
+    try {
+      await this.mountPoolById(pool.id, { passphrase });
+      return null;
+    } catch (error) {
+      console.warn(`Device change done but mounting NonRAID pool failed: ${error.message}`);
+      return error.message;
+    }
+  }
+
   async _hasLuksKeyfile(poolName) {
     return fs.access(`/boot/config/system/luks/${poolName}.key`).then(() => true, () => false);
   }
@@ -9358,6 +9461,8 @@ class PoolsService {
         throw new Error('Device replacement is only supported for NonRAID pools');
       }
 
+      await this._assertNoNonRaidParityOperation(pool);
+
       // Check if pool is mounted
       const mountPoint = path.join(this.mountBasePath, pool.name);
       const isMounted = await this._isMounted(mountPoint);
@@ -9368,27 +9473,35 @@ class PoolsService {
 
       await this._lockNonRaidDeviceChange(pool);
       deviceChangeLocked = true;
+      await this._refreshNonRaidDeviceSymlinks(pool);
 
       // Validate replacements
       const dataReplacements = [];
       const parityReplacements = [];
 
       for (const replacement of replacements) {
-        const { slot, newDevice } = replacement;
+        const { slot, newDevice, type } = replacement;
 
         if (!slot) throw new Error('Slot is required for each replacement');
         if (!newDevice) throw new Error('New device path is required for each replacement');
+        if (type && type !== 'data' && type !== 'parity') {
+          throw new Error(`Invalid replacement type "${type}", must be "data" or "parity"`);
+        }
 
-        // Check if it's a data device or parity device
-        const dataDevice = pool.data_devices.find(d => d.slot === slot.toString());
-        const parityDevice = pool.parity_devices?.find(d => d.slot === slot.toString());
+        // Data and parity slots both start at 1, so without a type the data slot wins
+        const dataDevice = type !== 'parity'
+          ? pool.data_devices.find(d => String(d.slot) === String(slot))
+          : null;
+        const parityDevice = !dataDevice && type !== 'data'
+          ? pool.parity_devices?.find(d => String(d.slot) === String(slot))
+          : null;
 
         if (dataDevice) {
           dataReplacements.push({ slot, newDevice, oldDevice: dataDevice });
         } else if (parityDevice) {
           parityReplacements.push({ slot, newDevice, oldDevice: parityDevice });
         } else {
-          throw new Error(`Slot ${slot} not found in pool`);
+          throw new Error(`${type === 'parity' ? 'Parity slot' : 'Slot'} ${slot} not found in pool`);
         }
       }
 
@@ -9426,7 +9539,7 @@ class PoolsService {
 
       // Calculate parity sizes (exclude devices being replaced)
       for (const parityDev of pool.parity_devices || []) {
-        if (!parityReplacements.some(r => r.slot.toString() === parityDev.slot)) {
+        if (!parityReplacements.some(r => String(r.slot) === String(parityDev.slot))) {
           const byIdPath = `/dev/disk/by-id/${parityDev.id}`;
           try {
             const { stdout } = await execPromise(`readlink -f ${byIdPath}`);
@@ -9444,9 +9557,9 @@ class PoolsService {
 
       // Calculate data sizes (exclude devices being replaced)
       for (const dataDev of pool.data_devices) {
-        if (!dataReplacements.some(r => r.slot.toString() === dataDev.slot)) {
+        if (!dataReplacements.some(r => String(r.slot) === String(dataDev.slot))) {
           try {
-            const device = await this.getRealDevicePathFromUuid(dataDev.id);
+            const device = await this._resolveNonRaidDataDevice(pool, dataDev);
             const size = await this.getDeviceSize(device);
             if (size > largestDataSize) {
               largestDataSize = size;
@@ -9480,11 +9593,16 @@ class PoolsService {
           throw new Error('format: true is required when replacing devices in NonRAID pools');
         }
         const preparedDevice = await this._ensurePartition(newDevice);
+        const partuuid = await this._getPartUuid(preparedDevice);
+        if (!partuuid) {
+          throw new Error(`Could not determine partition UUID for ${preparedDevice}`);
+        }
 
         preparedDataReplacements.push({
           slot,
           originalDevice: newDevice,
           preparedDevice,
+          partuuid,
           oldDeviceInfo: replacement.oldDevice
         });
       }
@@ -9543,21 +9661,25 @@ class PoolsService {
 
       // Import data devices
       for (const device of pool.data_devices) {
-        const replacement = preparedDataReplacements.find(r => r.slot.toString() === device.slot);
+        const replacement = preparedDataReplacements.find(r => String(r.slot) === String(device.slot));
         const slot = parseInt(device.slot);
 
         if (replacement) {
           // The rebuilt disk ends up carrying the UUID of the disk it replaces, so the stored
-          // id stays untouched
+          // id stays untouched and the old disk is told apart by the partuuid
           const deviceSize = await this._getDeviceSizeInKB(replacement.preparedDevice);
           const deviceBasename = path.basename(replacement.preparedDevice);
 
           const importCmd = `echo "import ${slot} ${deviceBasename} 0 ${deviceSize} 0 ${device.id}" > /proc/nmdcmd`;
           console.log(`Importing NEW data device slot ${slot}: ${importCmd}`);
           await execPromise(importCmd);
+          device.partuuid = replacement.partuuid;
         } else {
           // Import existing device
-          const physicalDevice = await this.getRealDevicePathFromUuid(device.id);
+          const physicalDevice = await this._resolveNonRaidDataDevice(pool, device);
+          if (!physicalDevice) {
+            throw new Error(`Could not find physical device for UUID ${device.id} at slot ${slot}`);
+          }
           const deviceSize = await this._getDeviceSizeInKB(physicalDevice);
           const deviceBasename = path.basename(physicalDevice);
 
@@ -9570,7 +9692,7 @@ class PoolsService {
       // Import parity devices
       if (pool.parity_devices && pool.parity_devices.length > 0) {
         for (const parityDevice of pool.parity_devices) {
-          const replacement = preparedParityReplacements.find(r => r.slot.toString() === parityDevice.slot);
+          const replacement = preparedParityReplacements.find(r => String(r.slot) === String(parityDevice.slot));
           const jsonSlot = parseInt(parityDevice.slot);
           const arraySlot = jsonSlot === 1 ? 0 : 29;
 
@@ -9608,6 +9730,8 @@ class PoolsService {
       // Set write mode based on config
       const writeMode = pool.config?.md_writemode || 'normal';
       await this._setNonRaidWriteMode(writeMode);
+
+      await this._startNonRaidResync(pool.name);
 
       // Update pool in pools.json
       pools[poolIndex] = pool;
@@ -9685,6 +9809,8 @@ class PoolsService {
       poolConfig.config = pool.config;
       strategy = this._getDeviceStrategy(poolConfig);
 
+      await this._assertNoNonRaidParityOperation(pool);
+
       // Check if pool is mounted
       const mountPoint = path.join(this.mountBasePath, pool.name);
       const isMounted = await this._isMounted(mountPoint);
@@ -9699,6 +9825,7 @@ class PoolsService {
 
       await this._lockNonRaidDeviceChange(pool);
       deviceChangeLocked = true;
+      await this._refreshNonRaidDeviceSymlinks(pool);
       await this._assertDeviceNotInPool(pool, newDevice, await this._collectNonRaidMemberDisks(pool));
       await this._assertDevicesUnused([newDevice]);
       reservedDisks = await this._reserveDisks([newDevice]);
@@ -9842,7 +9969,7 @@ class PoolsService {
 
         // The stored UUID is the LUKS container UUID for encrypted pools, so this
         // resolves to the physical device in both cases
-        const physicalDevice = await this.getRealDevicePathFromUuid(device.id);
+        const physicalDevice = await this._resolveNonRaidDataDevice(pool, device);
 
         if (!physicalDevice) {
           throw new Error(`Could not find physical device for UUID ${device.id} at slot ${slot}`);
@@ -9910,13 +10037,18 @@ class PoolsService {
             .catch(err => console.warn(`Failed to send NonRAID notification: ${err.message}`));
         }
 
+        const mountError = await this._mountNonRaidPoolAfterDeviceChange(pool, options.passphrase || null);
+        let message = clearStarted
+          ? `Data device is being cleared for NonRAID pool "${pool.name}" at slot ${nextSlot}. It will be formatted and added once clearing is complete.`
+          : `Data device was added to NonRAID pool "${pool.name}" at slot ${nextSlot}, but clearing could not be started. It is retried on the next mount.`;
+        if (mountError) message += ` Mounting the pool failed: ${mountError}`;
+
         return {
           success: true,
-          message: clearStarted
-            ? `Data device is being cleared for NonRAID pool "${pool.name}" at slot ${nextSlot}. It will be formatted and added once clearing is complete.`
-            : `Data device was added to NonRAID pool "${pool.name}" at slot ${nextSlot}, but clearing could not be started. It is retried on the next mount.`,
+          message,
           pool,
-          slot: nextSlot
+          slot: nextSlot,
+          mounted: !mountError
         };
       }
 
@@ -9966,11 +10098,16 @@ class PoolsService {
       pools[poolIndex] = pool;
       await this._writePools(pools);
 
+      const mountError = await this._mountNonRaidPoolAfterDeviceChange(pool, options.passphrase || null);
+      let message = `Successfully added data device to NonRAID pool "${pool.name}" at slot ${nextSlot}${shouldRunCheck ? '. Parity check started.' : ''}`;
+      if (mountError) message += ` Mounting the pool failed: ${mountError}`;
+
       return {
         success: true,
-        message: `Successfully added data device to NonRAID pool "${pool.name}" at slot ${nextSlot}${shouldRunCheck ? '. Parity check started.' : ''}`,
+        message,
         pool,
-        slot: nextSlot
+        slot: nextSlot,
+        mounted: !mountError
       };
     } catch (error) {
       console.error(`Error adding data device to NonRAID pool: ${error.message}`);
@@ -10034,6 +10171,8 @@ class PoolsService {
 
       const pool = pools[poolIndex];
 
+      await this._assertNoNonRaidParityOperation(pool);
+
       // Check if pool is mounted
       const mountPoint = path.join(this.mountBasePath, pool.name);
       const isMounted = await this._isMounted(mountPoint);
@@ -10044,6 +10183,7 @@ class PoolsService {
 
       await this._lockNonRaidDeviceChange(pool);
       deviceChangeLocked = true;
+      await this._refreshNonRaidDeviceSymlinks(pool);
       await this._assertDeviceNotInPool(pool, newDevice, await this._collectNonRaidMemberDisks(pool));
       await this._assertDevicesUnused([newDevice]);
       reservedDisks = await this._reserveDisks([newDevice]);
@@ -10063,7 +10203,7 @@ class PoolsService {
       let largestDataDevice = null;
       for (const dataDev of pool.data_devices) {
         try {
-          const device = await this.getRealDevicePathFromUuid(dataDev.id);
+          const device = await this._resolveNonRaidDataDevice(pool, dataDev);
           const size = await this.getDeviceSize(device);
           if (size > largestDataSize) {
             largestDataSize = size;
@@ -10088,6 +10228,11 @@ class PoolsService {
         throw new Error(`Could not find /dev/disk/by-id/ path for parity device ${newDevice}`);
       }
 
+      // The pool is mounted right after the parity is added, which needs the LUKS key
+      if (pool.config?.encrypted && !options.passphrase?.trim() && !await this._hasLuksKeyfile(pool.name)) {
+        throw new Error(`No keyfile found for encrypted pool ${pool.name}. Please provide a passphrase.`);
+      }
+
       // Load md-nonraid module
       console.log('Loading md-nonraid kernel module...');
       const nonraidDatPath = '/boot/config/system/nonraid.dat';
@@ -10103,7 +10248,7 @@ class PoolsService {
 
         // The stored UUID is the LUKS container UUID for encrypted pools, so this
         // resolves to the physical device in both cases
-        const physicalDevice = await this.getRealDevicePathFromUuid(device.id);
+        const physicalDevice = await this._resolveNonRaidDataDevice(pool, device);
 
         if (!physicalDevice) {
           throw new Error(`Could not find physical device for UUID ${device.id} at slot ${slot}`);
@@ -10149,11 +10294,7 @@ class PoolsService {
       const writeMode = pool.config?.md_writemode || 'normal';
       await this._setNonRaidWriteMode(writeMode);
 
-      // ALWAYS run check CORRECT when adding parity
-      const checkStarted = await this._startNonRaidParityCheck();
-      if (checkStarted) {
-        this._startNonRaidMonitor(pool.name, 'check CORRECT', true);
-      }
+      await this._startNonRaidResync(pool.name);
 
       // Add new parity device to pool config
       if (!pool.parity_devices) pool.parity_devices = [];
@@ -10177,11 +10318,16 @@ class PoolsService {
       pools[poolIndex] = pool;
       await this._writePools(pools);
 
+      const mountError = await this._mountNonRaidPoolAfterDeviceChange(pool, options.passphrase || null);
+
       return {
         success: true,
-        message: `Successfully added parity device to NonRAID pool "${pool.name}" at slot ${nextJsonSlot}. Parity check started.`,
+        message: mountError
+          ? `Added parity device to NonRAID pool "${pool.name}" at slot ${nextJsonSlot}, parity check started, but mounting failed: ${mountError}`
+          : `Successfully added parity device to NonRAID pool "${pool.name}" at slot ${nextJsonSlot}. Pool mounted and parity check started.`,
         pool,
-        slot: nextJsonSlot
+        slot: nextJsonSlot,
+        mounted: !mountError
       };
     } catch (error) {
       console.error(`Error adding parity device to NonRAID pool: ${error.message}`);
@@ -11473,8 +11619,12 @@ class PoolsService {
   async _mountNonRaidPool(pool, options = {}) {
     const mountPoint = path.join(this.mountBasePath, pool.name);
     const nonraidBasePath = path.join(this.mergerfsBasePath, pool.name);
+    const mountedDevices = [];
+    let moduleLoadedHere = false;
+    let arrayStartedHere = false;
 
     try {
+      await this._refreshNonRaidDeviceSymlinks(pool);
       // Ensure device paths are available
       await this._ensureDevicePaths(pool);
 
@@ -11498,7 +11648,7 @@ class PoolsService {
       for (const device of pool.data_devices) {
         // For encrypted pools the stored UUID is the one of the LUKS container, so this
         // resolves to the physical device in both cases
-        const physicalDevice = await this.getRealDevicePathFromUuid(device.id);
+        const physicalDevice = await this._resolveNonRaidDataDevice(pool, device);
 
         // Check if device exists
         if (physicalDevice) {
@@ -11563,6 +11713,7 @@ class PoolsService {
         console.log('Loading md-nonraid kernel module...');
         const nonraidDatPath = '/boot/config/system/nonraid.dat';
         await execPromise(`modprobe md-nonraid super=${nonraidDatPath}`);
+        moduleLoadedHere = true;
       }
 
       // Create nonraid base directory
@@ -11650,6 +11801,7 @@ class PoolsService {
           }
         }
 
+        arrayStartedHere = true;
         await this._startNonRaidArray();
       }
 
@@ -11678,7 +11830,6 @@ class PoolsService {
       }
 
       // Mount individual data devices (only available ones)
-      const mountedDevices = [];
       for (let i = 0; i < availableDataDevices.length; i++) {
         const device = availableDataDevices[i];
         const slot = device.slot;
@@ -11719,6 +11870,8 @@ class PoolsService {
 
       this._resumePendingNonRaidDisks(options.passphrase || null)
         .catch(err => console.warn(`Resuming pending NonRAID disks failed: ${err.message}`));
+      this._growNonRaidFilesystems(pool)
+        .catch(err => console.warn(`Growing NonRAID filesystems failed: ${err.message}`));
 
       return {
         success: true,
@@ -11731,7 +11884,35 @@ class PoolsService {
       };
     } catch (error) {
       console.error(`Error mounting NonRAID pool: ${error.message}`);
+      await this._cleanupFailedNonRaidMount(pool, mountedDevices, moduleLoadedHere, arrayStartedHere);
       throw error;
+    }
+  }
+
+  // An array that was already running (e.g. rebuild after a device change) is left running
+  async _cleanupFailedNonRaidMount(pool, mountedDevices, moduleLoadedHere, arrayStartedHere) {
+    const mountPoint = path.join(this.mountBasePath, pool.name);
+    if (await this._isMounted(mountPoint)) {
+      await this.unmountDevice(mountPoint, { removeDirectory: true })
+        .catch(err => console.warn(`Failed to unmount ${mountPoint}: ${err.message}`));
+    }
+    for (const deviceMountPoint of mountedDevices) {
+      await this.unmountDevice(deviceMountPoint, { removeDirectory: true })
+        .catch(err => console.warn(`Failed to unmount ${deviceMountPoint}: ${err.message}`));
+    }
+
+    if (pool.config?.encrypted) {
+      const dataSlots = (pool.data_devices || []).map(d => parseInt(d.slot));
+      await this._closeLuksDevicesWithSlots(dataSlots.map(slot => `/dev/nmd${slot}p1`), pool.name, dataSlots)
+        .catch(err => console.warn(`Failed to close LUKS devices: ${err.message}`));
+    }
+
+    if (!arrayStartedHere) return;
+    try {
+      await execPromise('echo "stop" > /proc/nmdcmd');
+      if (moduleLoadedHere) await execPromise('modprobe -r md-nonraid');
+    } catch (err) {
+      console.warn(`Failed to stop NonRAID array after failed mount: ${err.message}`);
     }
   }
 

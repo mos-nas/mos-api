@@ -1309,6 +1309,12 @@ class DisksService {
    * @returns {Promise<string|null>} Real device path (e.g. /dev/nvme0n1p1) or null
    */
   async _resolvePoolDevicePath(dev) {
+    // NonRAID pins replaced disks by partuuid, the old disk still carries the UUID
+    if (dev.partuuid) {
+      const resolved = await this._resolveUuidToDevicePath(dev.partuuid);
+      if (resolved) return resolved;
+    }
+
     // Strategy 1: Resolve from UUID (most reliable)
     if (dev.id) {
       const resolved = await this._resolveUuidToDevicePath(dev.id);
@@ -1402,8 +1408,8 @@ class DisksService {
                 };
               }
 
-              // Skip UUID check if no ID
-              if (!poolDevice.id) {
+              // Skip UUID check if no ID, a partuuid pinned device is matched by path only
+              if (!poolDevice.id || poolDevice.partuuid) {
                 continue;
               }
 
