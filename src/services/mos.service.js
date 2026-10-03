@@ -2154,8 +2154,12 @@ class MosService {
       })
       .map(i => i.name);
 
+    // VPN interfaces are not part of network.json, keep user selection
+    const keptTunIfaces = sysSettings.webui.listen_interfaces
+      .filter(name => this._getTunProvider(name) !== 'tun' && !activeListenIfaces.includes(name));
+
     const oldList = JSON.stringify(sysSettings.webui.listen_interfaces);
-    sysSettings.webui.listen_interfaces = activeListenIfaces;
+    sysSettings.webui.listen_interfaces = [...activeListenIfaces, ...keptTunIfaces];
 
     if (oldList !== JSON.stringify(sysSettings.webui.listen_interfaces)) {
       await fs.writeFile('/boot/config/system.json', JSON.stringify(sysSettings, null, 2), 'utf8');
@@ -2953,6 +2957,62 @@ class MosService {
       return interfaces;
     } catch (error) {
       throw new Error(`Error detecting physical interfaces: ${error.message}`);
+    }
+  }
+
+  _getTunProvider(name) {
+    if (name.startsWith('tailscale')) return 'tailscale';
+    if (name.startsWith('wt')) return 'netbird';
+    if (name.startsWith('wg')) return 'wireguard';
+    return 'tun';
+  }
+
+  /**
+   * Detects tun and wireguard interfaces (Tailscale, Netbird, WireGuard, generic tun).
+   * @returns {Promise<Array>} [{ name, mac, link_state, speed, adapter, type, provider }]
+   */
+  async detectTunInterfaces() {
+    try {
+      const netDir = '/sys/class/net';
+      const entries = await fs.readdir(netDir);
+      const interfaces = [];
+
+      for (const name of entries) {
+        const ifDir = path.join(netDir, name);
+
+        let isTun = false;
+        try {
+          await fs.access(path.join(ifDir, 'tun_flags'));
+          isTun = true;
+        } catch {
+          try {
+            const uevent = await fs.readFile(path.join(ifDir, 'uevent'), 'utf8');
+            isTun = /^DEVTYPE=wireguard$/m.test(uevent);
+          } catch { /* ignore */ }
+        }
+        if (!isTun) continue;
+
+        let linkState = 'unknown';
+        try {
+          linkState = (await fs.readFile(path.join(ifDir, 'operstate'), 'utf8')).trim();
+        } catch { /* ignore */ }
+
+        interfaces.push({
+          name,
+          mac: null,
+          link_state: linkState,
+          speed: null,
+          adapter: null,
+          type: 'tun',
+          provider: this._getTunProvider(name)
+        });
+      }
+
+      interfaces.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true }));
+
+      return interfaces;
+    } catch (error) {
+      throw new Error(`Error detecting tun interfaces: ${error.message}`);
     }
   }
 

@@ -1026,10 +1026,18 @@ router.post('/settings/vm', async (req, res) => {
  * /mos/system/network/interfaces:
  *   get:
  *     summary: Detect physical network interfaces
- *     description: Scans the system for all physical network interfaces and returns their MAC addresses, link state, and speed. This is a read-only system endpoint (admin only)
+ *     description: Scans the system for all physical network interfaces and returns their MAC addresses, link state, and speed. With include=tun, tun/wireguard interfaces (Tailscale, Netbird, WireGuard) are appended. This is a read-only system endpoint without reconciliation (admin only)
  *     tags: [MOS]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: include
+ *         required: false
+ *         schema:
+ *           type: string
+ *           enum: [tun]
+ *         description: Also list tun/wireguard interfaces
  *     responses:
  *       200:
  *         description: Physical interfaces detected successfully
@@ -1062,6 +1070,15 @@ router.post('/settings/vm', async (req, res) => {
  *                     nullable: true
  *                     description: PCI device name (e.g. Intel Corporation I225-V)
  *                     example: "Ethernet controller: Intel Corporation I225-V"
+ *                   type:
+ *                     type: string
+ *                     description: Only present for include=tun entries
+ *                     example: "tun"
+ *                   provider:
+ *                     type: string
+ *                     enum: [tailscale, netbird, wireguard, tun]
+ *                     description: Only present for include=tun entries
+ *                     example: "tailscale"
  *       401:
  *         description: Not authenticated
  *       500:
@@ -1076,6 +1093,9 @@ router.post('/settings/vm', async (req, res) => {
 router.get('/system/network/interfaces', async (req, res) => {
   try {
     const interfaces = await mosService.detectPhysicalInterfaces();
+    if (req.query.include === 'tun') {
+      interfaces.push(...await mosService.detectTunInterfaces());
+    }
     res.json(interfaces);
   } catch (error) {
     res.status(500).json({ error: error.message });
