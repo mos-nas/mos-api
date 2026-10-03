@@ -830,11 +830,11 @@ router.get('/info', checkRole(['admin']), async (req, res) => {
  *                 mountpoint: "/mnt/storage-pool"
  *                 available: true
  *               - name: "backup-pool"
- *                 type: "ext4"
+ *                 type: "single"
  *                 mountpoint: "/mnt/backup-pool"
  *                 available: true
  *               - name: "temp-pool"
- *                 type: "xfs"
+ *                 type: "single"
  *                 mountpoint: "/mnt/temp-pool"
  *                 available: false
  *       401:

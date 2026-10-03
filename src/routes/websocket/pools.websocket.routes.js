@@ -37,12 +37,12 @@ const { authenticateToken } = require('../../middleware/auth.middleware');
  *               example: "1746318722394"
  *             type:
  *               type: string
- *               enum: [mergerfs, nonraid, btrfs, bcachefs, xfs, ext4]
+ *               enum: [mergerfs, nonraid, btrfs, bcachefs, single]
  *               description: Filter by pool type
  *               example: "mergerfs"
  *             exclude_type:
  *               type: string
- *               enum: [mergerfs, nonraid, btrfs, bcachefs, xfs, ext4]
+ *               enum: [mergerfs, nonraid, btrfs, bcachefs, single]
  *               description: Exclude pools of specific type
  *               example: "btrfs"
  *     WebSocketPoolsPerformance:
@@ -256,8 +256,8 @@ router.get('/websocket/events', (req, res) => {
             includePerformance: 'boolean (optional, default: false) - Enable I/O throughput monitoring',
             filters: {
               id: 'specific-pool-id (optional)',
-              type: 'mergerfs|nonraid|btrfs|bcachefs|xfs|ext4 (optional)',
-              exclude_type: 'mergerfs|nonraid|btrfs|bcachefs|xfs|ext4 (optional)'
+              type: 'mergerfs|nonraid|btrfs|bcachefs|single (optional)',
+              exclude_type: 'mergerfs|nonraid|btrfs|bcachefs|single (optional)'
             }
           }
         },

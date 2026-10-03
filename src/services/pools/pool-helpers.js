@@ -6,6 +6,9 @@ const execPromise = util.promisify(exec);
 const POOLS_FILE = '/boot/config/pools.json';
 const VPOOLS_FILE = '/boot/config/vpools.json';
 
+// device or base disk -> reference count, base disks are shared by partitions
+const preparingDisks = new Map();
+
 /**
  * Helper functions for pool operations
  */
@@ -56,6 +59,41 @@ class PoolHelpers {
 
     // Handle regular devices: /dev/sda1 -> /dev/sda
     return devicePath.replace(/\d+$/, '');
+  }
+
+  /**
+   * Hide devices from the unassigned disks while a pool operation prepares them
+   * @param {string[]} devices - Resolved device paths
+   * @returns {string[]} Keys to hand to releaseDisks()
+   */
+  static reserveDisks(devices) {
+    const busy = devices.find(d => preparingDisks.has(d));
+    if (busy) {
+      throw new Error(`Device ${busy} is already being prepared for a pool`);
+    }
+
+    const keys = [...new Set(devices)].flatMap(d => {
+      const base = PoolHelpers.getBaseDiskFromPartition(d);
+      return base && base !== d ? [d, base] : [d];
+    });
+    for (const key of keys) preparingDisks.set(key, (preparingDisks.get(key) || 0) + 1);
+    return keys;
+  }
+
+  static releaseDisks(keys) {
+    for (const key of keys) {
+      const count = (preparingDisks.get(key) || 0) - 1;
+      if (count > 0) preparingDisks.set(key, count);
+      else preparingDisks.delete(key);
+    }
+  }
+
+  static isDiskPreparing(device) {
+    return preparingDisks.has(device);
+  }
+
+  static getPreparingDisks() {
+    return preparingDisks.keys();
   }
 
   /**

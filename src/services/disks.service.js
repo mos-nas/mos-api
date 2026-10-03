@@ -4,6 +4,7 @@ const execPromise = util.promisify(exec);
 const fs = require('fs').promises;
 const path = require('path');
 const net = require('net');
+const PoolHelpers = require('./pools/pool-helpers');
 
 // MOS notify socket path
 const MOS_NOTIFY_SOCKET = '/var/run/mos-notify.sock';
@@ -2227,6 +2228,10 @@ class DisksService {
             }
           }
         }
+      }
+
+      for (const disk of PoolHelpers.getPreparingDisks()) {
+        poolDisks.add(disk);
       }
 
       // Build set of devices used as bcache backing or cache devices

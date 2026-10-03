@@ -791,7 +791,7 @@ router.patch('/:id/comment', checkRole(['admin']), async (req, res) => {
  *                 description: RAID level for BTRFS pools
  *               shared:
  *                 type: boolean
- *                 description: Whether pool is shared (applies to all pool types - mergerfs, nonraid, btrfs, xfs, ext4)
+ *                 description: Whether pool is shared (applies to all pool types - mergerfs, nonraid, btrfs, bcachefs, single)
  *               sync.enabled:
  *                 type: boolean
  *                 description: Enable SnapRAID sync (dot-notation example)

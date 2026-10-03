@@ -1730,12 +1730,12 @@ class MosService {
       const pathsToCheck = {};
       const effectiveDirectory = updates.directory !== undefined ? updates.directory : current.directory;
 
+      // Disabling must not be blocked by an unavailable directory
       if (willBeEnabled) {
         this._assertRequiredServicePaths('LXC', { directory: effectiveDirectory });
-      }
-
-      if (effectiveDirectory) {
-        pathsToCheck.directory = effectiveDirectory;
+        if (effectiveDirectory) {
+          pathsToCheck.directory = effectiveDirectory;
+        }
       }
       if (updates.backup_path && updates.backup_path !== current.backup_path) {
         pathsToCheck.backup_path = updates.backup_path;
@@ -1999,15 +1999,15 @@ class MosService {
       const effectiveDirectory = updates.directory !== undefined ? updates.directory : current.directory;
       const effectiveVdiskDirectory = updates.vdisk_directory !== undefined ? updates.vdisk_directory : current.vdisk_directory;
 
+      // Disabling must not be blocked by an unavailable directory
       if (willBeEnabled) {
         this._assertRequiredServicePaths('VM', {
           directory: effectiveDirectory,
           vdisk_directory: effectiveVdiskDirectory
         });
-      }
-
-      if (effectiveDirectory) {
-        pathsToCheck.directory = effectiveDirectory;
+        if (effectiveDirectory) {
+          pathsToCheck.directory = effectiveDirectory;
+        }
       }
       if (updates.vdisk_directory && updates.vdisk_directory !== current.vdisk_directory) {
         pathsToCheck.vdisk_directory = updates.vdisk_directory;

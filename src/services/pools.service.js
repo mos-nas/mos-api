@@ -1358,6 +1358,11 @@ class PoolsService {
    * @returns {Promise<boolean>} - True if cleanup was successful
    */
   async cleanupNonRAIDConfig() {
+    for (const { reservedDisks } of this._nonRaidPendingDisks.values()) {
+      PoolHelpers.releaseDisks(reservedDisks || []);
+    }
+    this._nonRaidPendingDisks.clear();
+
     try {
       const nonraidDatPath = '/boot/config/system/nonraid.dat';
 
@@ -3285,6 +3290,7 @@ class PoolsService {
     const strategy = this._getDeviceStrategy(poolConfig);
     const cacheDevices = options.cache_devices || [];
     let preparedDeviceInfos = [];
+    let reservedDisks = [];
 
     try {
       // Validate inputs
@@ -3324,6 +3330,8 @@ class PoolsService {
           throw new Error(`Device ${device} is already mounted at ${mountStatus.mountPoint}`);
         }
       }
+
+      reservedDisks = await this._reserveDisks([...devices, ...cacheDevices]);
 
       // Prepare physical devices (partitioning), data devices first so slots stay grouped
       const physicalDevices = [];
@@ -3442,6 +3450,8 @@ class PoolsService {
         }
       }
       throw new Error(`Error creating bcachefs pool: ${error.message}`);
+    } finally {
+      PoolHelpers.releaseDisks(reservedDisks);
     }
   }
 
@@ -3520,10 +3530,13 @@ class PoolsService {
     let nextSlot = Math.max(0, ...pool.data_devices.map(d => parseInt(d.slot))) + 1;
     const addedDevices = [];
     const preparedInfos = [];
+    let reservedDisks = [];
 
     this._lockBcachefsDeviceOperation(pool, 'device addition');
 
     try {
+      reservedDisks = await this._reserveDisks(newDevices);
+
       for (const device of newDevices) {
         PoolHelpers.validateDevicePath(device);
 
@@ -3599,6 +3612,7 @@ class PoolsService {
       throw error;
     } finally {
       PoolsService._bcachefsDeviceOperations.delete(pool.id);
+      PoolHelpers.releaseDisks(reservedDisks);
     }
   }
 
@@ -3763,6 +3777,38 @@ class PoolsService {
   }
 
   /**
+   * Collect the physical disks of a NonRAID pool for _assertDeviceNotInPool()
+   * Every device carrying a member id counts: with a single data disk the parity is a bit for
+   * bit copy, so the filesystem UUID shows up twice and a by-uuid symlink only points to one
+   * @param {Object} pool - NonRAID pool from pools.json
+   * @returns {Promise<Set<string>>} Set of member paths and their base disks
+   * @private
+   */
+  async _collectNonRaidMemberDisks(pool) {
+    const disks = new Set();
+    const add = device => {
+      disks.add(device);
+      disks.add(PoolHelpers.getBaseDiskFromPartition(device));
+    };
+
+    // lsblk reads the udev database and does not wake disks from standby
+    const ids = new Set(pool.data_devices.map(d => d.id));
+    const { stdout } = await execPromise('lsblk -Ppno NAME,UUID,PARTUUID');
+    for (const line of stdout.split('\n')) {
+      const [, name, uuid, partuuid] = line.match(/^NAME="([^"]*)" UUID="([^"]*)" PARTUUID="([^"]*)"/) || [];
+      if (name && !/^\/dev\/(nmd|mapper\/|dm-)/.test(name) && (ids.has(uuid) || ids.has(partuuid))) {
+        add(name);
+      }
+    }
+
+    for (const parity of pool.parity_devices || []) {
+      add(await this._realPathOrSelf(`/dev/disk/by-id/${parity.id}`));
+    }
+
+    return disks;
+  }
+
+  /**
    * Reject a device that is already a member of the pool
    * @param {Object} pool - Pool object
    * @param {string} device - Candidate device
@@ -3789,15 +3835,31 @@ class PoolsService {
       throw new Error(`Device(s) ${[...new Set(duplicates)].join(', ')} specified more than once`);
     }
 
+    const preparing = resolved.find(d => PoolHelpers.isDiskPreparing(d));
+    if (preparing) {
+      throw new Error(`Device ${preparing} is currently being prepared for a pool`);
+    }
+
     const pools = await this.disksService._loadPoolsWithResolvedPaths();
     const mounts = await this.disksService._getMountInfo();
     for (const device of devices) {
       const usage = await this.disksService._isDiskInUse(device, pools, mounts);
       if (usage.inUse) {
         const where = usage.poolName ? `pool ${usage.poolName}` : `mounted at ${usage.mountpoint}`;
-        throw new Error(`Device ${device} is already in use (${where}). Please free it first before creating a pool.`);
+        throw new Error(`Device ${device} is already in use (${where}). Please free it first.`);
       }
     }
+  }
+
+  /**
+   * Hide devices from the unassigned disks until the pool operation is done
+   * @param {string[]} devices - Device paths as passed by the caller
+   * @returns {Promise<string[]>} Keys for PoolHelpers.releaseDisks()
+   * @private
+   */
+  async _reserveDisks(devices) {
+    const resolved = await Promise.all(devices.map(d => this._realPathOrSelf(d)));
+    return PoolHelpers.reserveDisks(resolved);
   }
 
   /**
@@ -4902,7 +4964,8 @@ class PoolsService {
       const newPool = {
         id: poolId,
         name,
-        type: finalFilesystem,
+        // A single btrfs device stays a btrfs pool, it can be grown and supports scrub/balance
+        type: finalFilesystem === 'btrfs' ? 'btrfs' : 'single',
         automount: options.automount !== undefined ? options.automount : false,
         comment: options.comment || "",
         index: this._getNextPoolIndex(pools),
@@ -5020,7 +5083,7 @@ class PoolsService {
 
       // For single device pools
       if (pool.data_devices && pool.data_devices.length === 1 &&
-          ['ext4', 'xfs', 'btrfs'].includes(pool.type)) {
+          ['single', 'ext4', 'xfs', 'btrfs'].includes(pool.type)) {
         let device = pool.data_devices[0].device;
         const mountPoint = path.join(this.mountBasePath, pool.name);
 
@@ -5369,7 +5432,7 @@ class PoolsService {
 
       // For single device pools
       if (pool.data_devices && pool.data_devices.length === 1 &&
-          ['ext4', 'xfs', 'btrfs', 'vfat'].includes(pool.type)) {
+          ['single', 'ext4', 'xfs', 'btrfs', 'vfat'].includes(pool.type)) {
         result = await this._unmountSingleDevicePool(pool, options.force);
       }
 
@@ -5477,7 +5540,7 @@ class PoolsService {
       await this._unmountBcachefsPool(pool, force);
     } else if (pool.type === 'btrfs' && pool.data_devices && pool.data_devices.length > 1) {
       await this._unmountMultiDeviceBtrfsPool(pool, force);
-    } else if (['btrfs', 'ext4', 'xfs', 'vfat'].includes(pool.type)) {
+    } else if (['single', 'btrfs', 'ext4', 'xfs', 'vfat'].includes(pool.type)) {
       await this._unmountSingleDevicePool(pool, force);
     } else {
       throw new Error(`Unsupported pool type for removal: ${pool.type}`);
@@ -6707,7 +6770,7 @@ class PoolsService {
   /**
    * List all pools with optional filtering
    * @param {Object} filters - Optional filters to apply
-   * @param {string} filters.type - Filter by pool type (e.g., 'mergerfs', 'btrfs', 'xfs')
+   * @param {string} filters.type - Filter by pool type (e.g., 'mergerfs', 'btrfs', 'single')
    * @param {string} filters.exclude_type - Exclude pools of specific type (e.g., 'mergerfs')
    * @param {Object} user - User object with byte_format preference
    */
@@ -7339,7 +7402,7 @@ class PoolsService {
       // Handle different pool types
       if (pool.type === 'mergerfs') {
         return this._removeDevicesFromMergerFSPool(pool, devices, options, pools, poolIndex);
-      } else if (pool.type === 'btrfs' || pool.type === 'ext4' || pool.type === 'xfs') {
+      } else if (['btrfs', 'single', 'ext4', 'xfs'].includes(pool.type)) {
         return this._removeDevicesFromBTRFSPool(pool, devices, options, pools, poolIndex);
       } else if (pool.type === 'bcachefs') {
         return this._removeDevicesFromBcachefsPool(pool, devices, options, pools, poolIndex);
@@ -8445,6 +8508,8 @@ class PoolsService {
     let preparedDataDevices = [];
     let mountedDataDevices = [];
     let openedLuksDevices = [];
+    let reservedDisks = [];
+    let moduleLoaded = false;
 
     try {
       // Validate inputs
@@ -8514,13 +8579,12 @@ class PoolsService {
 
       // Every check has to pass before nonraid.dat is deleted and devices are partitioned
       await this._assertDevicesUnused([...devices, ...parityDevices]);
+      reservedDisks = await this._reserveDisks([...devices, ...parityDevices]);
 
       // Validate parity devices up front - partitioning/formatting the data
       // devices later on is destructive and must not run into a parity error
       const parityByIds = new Map();
       if (parityDevices.length > 0) {
-        const toGB = bytes => (bytes / 1024 / 1024 / 1024).toFixed(2);
-
         let largestDataDevice = 0;
         let largestDataDeviceName = null;
         for (const device of devices) {
@@ -8536,8 +8600,8 @@ class PoolsService {
           if (paritySize < largestDataDevice) {
             throw new Error(
               `Parity device must be at least as large as the largest data device: ` +
-              `${parityDevice} (${toGB(paritySize)} GB) is smaller than ` +
-              `${largestDataDeviceName} (${toGB(largestDataDevice)} GB)`
+              `${parityDevice} (${paritySize} bytes) is smaller than ` +
+              `${largestDataDeviceName} (${largestDataDevice} bytes)`
             );
           }
 
@@ -8599,6 +8663,7 @@ class PoolsService {
       // Load the md-nonraid module
       console.log('Loading md-nonraid kernel module...');
       await execPromise(`modprobe md-nonraid super=${nonraidDatPath}`);
+      moduleLoaded = true;
 
       // Encrypted NonRAID pools put LUKS on top of md-nonraid: the raw partition is imported
       // into the array first and the container is created on /dev/nmd<slot>p1 afterwards, so
@@ -8871,9 +8936,8 @@ class PoolsService {
           }
         }
 
-        // Stop NonRAID array - only if the module actually got loaded
-        const nmdcmdAvailable = await fs.access('/proc/nmdcmd').then(() => true, () => false);
-        if (nmdcmdAvailable) {
+        // An early validation error must not touch an already running NonRAID pool
+        if (moduleLoaded) {
           // Cancel any running checks first
           try {
             await execPromise('echo "nocheck CANCEL" > /proc/nmdcmd');
@@ -8900,6 +8964,8 @@ class PoolsService {
       }
 
       throw new Error(`Error creating NonRAID pool: ${error.message}`);
+    } finally {
+      PoolHelpers.releaseDisks(reservedDisks);
     }
   }
 
@@ -9043,7 +9109,18 @@ class PoolsService {
 
     const pools = await this._readPools();
     const pool = pools.find(p => p.type === 'nonraid');
-    if (!pool || this._getNonRaidPendingSlots(pool, nmdstat).length === 0) return;
+    const pendingSlots = pool ? this._getNonRaidPendingSlots(pool, nmdstat) : [];
+    if (pendingSlots.length === 0) return;
+
+    // Reservations live in memory only and have to be restored after an API restart
+    for (const { slot, id } of pendingSlots) {
+      const pending = this._nonRaidPendingDisks.get(slot) || {};
+      if (pending.reservedDisks) continue;
+      const device = await this.getRealDevicePathFromUuid(id);
+      if (!device || PoolHelpers.isDiskPreparing(device)) continue;
+      this._nonRaidPendingDisks.set(slot, { ...pending, reservedDisks: PoolHelpers.reserveDisks([device]) });
+    }
+
     if (await this._isNonRaidParityOperationRunning()) return;
 
     if (nmdstat.mdResyncAction === 'clear') {
@@ -9141,6 +9218,7 @@ class PoolsService {
     const nonraidPool = pools.find(p => p.type === 'nonraid');
     nonraidPool.data_devices.push({ slot, id, filesystem, spindown: null });
     await this._writePools(pools);
+    PoolHelpers.releaseDisks(pending.reservedDisks || []);
     this._nonRaidPendingDisks.delete(slot);
 
     const mountPoint = path.join(this.mountBasePath, pool.name);
@@ -9256,6 +9334,8 @@ class PoolsService {
    */
   async replaceDevicesInNonRaidPool(poolId, replacements, options = {}) {
     let deviceChangeLocked = false;
+    let moduleLoaded = false;
+    let reservedDisks = [];
 
     try {
       // Validate inputs
@@ -9323,6 +9403,14 @@ class PoolsService {
         );
       }
 
+      const newDevices = replacements.map(r => r.newDevice);
+      const memberDisks = await this._collectNonRaidMemberDisks(pool);
+      for (const device of newDevices) {
+        await this._assertDeviceNotInPool(pool, device, memberDisks);
+      }
+      await this._assertDevicesUnused(newDevices);
+      reservedDisks = await this._reserveDisks(newDevices);
+
       // Check passphrase for encrypted pools with data replacements
       if (pool.config?.encrypted && dataReplacements.length > 0) {
         if (!options.passphrase || options.passphrase.trim() === '') {
@@ -9332,7 +9420,9 @@ class PoolsService {
 
       // Get smallest parity size and largest data size for validation
       let smallestParitySize = Infinity;
+      let smallestParityDevice = null;
       let largestDataSize = 0;
+      let largestDataDevice = null;
 
       // Calculate parity sizes (exclude devices being replaced)
       for (const parityDev of pool.parity_devices || []) {
@@ -9342,7 +9432,10 @@ class PoolsService {
             const { stdout } = await execPromise(`readlink -f ${byIdPath}`);
             const actualDevice = stdout.trim();
             const size = await this.getDeviceSize(actualDevice);
-            if (size < smallestParitySize) smallestParitySize = size;
+            if (size < smallestParitySize) {
+              smallestParitySize = size;
+              smallestParityDevice = actualDevice;
+            }
           } catch (error) {
             console.warn(`Could not get size for parity device ${parityDev.id}: ${error.message}`);
           }
@@ -9355,7 +9448,10 @@ class PoolsService {
           try {
             const device = await this.getRealDevicePathFromUuid(dataDev.id);
             const size = await this.getDeviceSize(device);
-            if (size > largestDataSize) largestDataSize = size;
+            if (size > largestDataSize) {
+              largestDataSize = size;
+              largestDataDevice = device;
+            }
           } catch (error) {
             console.warn(`Could not get size for data device ${dataDev.id}: ${error.message}`);
           }
@@ -9372,8 +9468,8 @@ class PoolsService {
           const newDeviceSize = await this.getDeviceSize(newDevice);
           if (newDeviceSize > smallestParitySize) {
             throw new Error(
-              `New data device ${newDevice} (${(newDeviceSize / 1024 / 1024 / 1024).toFixed(2)} GB) ` +
-              `is larger than smallest parity device (${(smallestParitySize / 1024 / 1024 / 1024).toFixed(2)} GB)`
+              `New data device ${newDevice} (${newDeviceSize} bytes) ` +
+              `is larger than smallest parity device ${smallestParityDevice} (${smallestParitySize} bytes)`
             );
           }
         }
@@ -9417,8 +9513,8 @@ class PoolsService {
         const newParitySize = await this.getDeviceSize(newDevice);
         if (largestDataSize > 0 && newParitySize < largestDataSize) {
           throw new Error(
-            `New parity device ${newDevice} (${(newParitySize / 1024 / 1024 / 1024).toFixed(2)} GB) ` +
-            `is smaller than largest data device (${(largestDataSize / 1024 / 1024 / 1024).toFixed(2)} GB)`
+            `New parity device ${newDevice} (${newParitySize} bytes) ` +
+            `is smaller than largest data device ${largestDataDevice} (${largestDataSize} bytes)`
           );
         }
 
@@ -9440,6 +9536,7 @@ class PoolsService {
       console.log('Loading md-nonraid kernel module...');
       const nonraidDatPath = '/boot/config/system/nonraid.dat';
       await execPromise(`modprobe md-nonraid super=${nonraidDatPath}`);
+      moduleLoaded = true;
 
       // Import all devices (with replacements)
       console.log('Importing devices into NonRAID array...');
@@ -9531,8 +9628,7 @@ class PoolsService {
       // Nothing to clean up: a replacement never opens a LUKS container, the rebuild
       // restores the existing one from parity
 
-      // Before the lock the array was not touched
-      if (deviceChangeLocked) {
+      if (moduleLoaded) {
         // Cancel any running checks first (ignore errors)
         try {
           await execPromise('echo "nocheck CANCEL" > /proc/nmdcmd');
@@ -9551,6 +9647,7 @@ class PoolsService {
       throw new Error(`Error replacing devices in NonRAID pool: ${error.message}`);
     } finally {
       if (deviceChangeLocked) PoolsService._nonRaidDeviceChangeActive = false;
+      PoolHelpers.releaseDisks(reservedDisks);
     }
   }
 
@@ -9566,6 +9663,8 @@ class PoolsService {
     let preparedNewDevice = null;
     let pendingSlot = null;
     let deviceChangeLocked = false;
+    let moduleLoaded = false;
+    let reservedDisks = [];
 
     try {
       // Validate inputs
@@ -9600,6 +9699,9 @@ class PoolsService {
 
       await this._lockNonRaidDeviceChange(pool);
       deviceChangeLocked = true;
+      await this._assertDeviceNotInPool(pool, newDevice, await this._collectNonRaidMemberDisks(pool));
+      await this._assertDevicesUnused([newDevice]);
+      reservedDisks = await this._reserveDisks([newDevice]);
 
       // Find next available data slot (1-28)
       const usedSlots = pool.data_devices.map(d => parseInt(d.slot));
@@ -9618,13 +9720,17 @@ class PoolsService {
       // Validate new device size against smallest parity (if exists)
       if (pool.parity_devices && pool.parity_devices.length > 0) {
         let smallestParitySize = Infinity;
+        let smallestParityDevice = null;
         for (const parityDev of pool.parity_devices) {
           const byIdPath = `/dev/disk/by-id/${parityDev.id}`;
           try {
             const { stdout } = await execPromise(`readlink -f ${byIdPath}`);
             const actualDevice = stdout.trim();
             const size = await this.getDeviceSize(actualDevice);
-            if (size < smallestParitySize) smallestParitySize = size;
+            if (size < smallestParitySize) {
+              smallestParitySize = size;
+              smallestParityDevice = actualDevice;
+            }
           } catch (error) {
             console.warn(`Could not get size for parity device ${parityDev.id}: ${error.message}`);
           }
@@ -9633,8 +9739,8 @@ class PoolsService {
         const newDeviceSize = await this.getDeviceSize(newDevice);
         if (smallestParitySize !== Infinity && newDeviceSize > smallestParitySize) {
           throw new Error(
-            `New data device ${newDevice} (${(newDeviceSize / 1024 / 1024 / 1024).toFixed(2)} GB) ` +
-            `is larger than smallest parity device (${(smallestParitySize / 1024 / 1024 / 1024).toFixed(2)} GB)`
+            `New data device ${newDevice} (${newDeviceSize} bytes) ` +
+            `is larger than smallest parity device ${smallestParityDevice} (${smallestParitySize} bytes)`
           );
         }
       }
@@ -9725,6 +9831,7 @@ class PoolsService {
       console.log('Loading md-nonraid kernel module...');
       const nonraidDatPath = '/boot/config/system/nonraid.dat';
       await execPromise(`modprobe md-nonraid super=${nonraidDatPath}`);
+      moduleLoaded = true;
 
       // Import all devices (including new one)
       console.log('Importing devices into NonRAID array...');
@@ -9787,7 +9894,8 @@ class PoolsService {
         pendingSlot = nextSlot;
         this._nonRaidPendingDisks.set(nextSlot, {
           filesystem,
-          passphrase: options.passphrase?.trim() ? options.passphrase : null
+          passphrase: options.passphrase?.trim() ? options.passphrase : null,
+          reservedDisks
         });
 
         // The disk is part of the array superblock now and cannot be rolled back,
@@ -9876,8 +9984,8 @@ class PoolsService {
         }
       }
 
-      // Before the lock the array was not touched, a pending disk is already committed to it
-      if (deviceChangeLocked && !pendingSlot) {
+      // A pending disk is already committed to the superblock
+      if (moduleLoaded && !pendingSlot) {
         // Cancel any running checks first (ignore errors)
         try {
           await execPromise('echo "nocheck CANCEL" > /proc/nmdcmd');
@@ -9896,6 +10004,8 @@ class PoolsService {
       throw new Error(`Error adding data device to NonRAID pool: ${error.message}`);
     } finally {
       if (deviceChangeLocked) PoolsService._nonRaidDeviceChangeActive = false;
+      // A pending disk stays reserved until _formatPendingNonRaidDisk() adds it to pools.json
+      if (!pendingSlot) PoolHelpers.releaseDisks(reservedDisks);
     }
   }
 
@@ -9907,6 +10017,8 @@ class PoolsService {
    */
   async addParityDeviceToNonRaidPool(newDevice, options = {}) {
     let deviceChangeLocked = false;
+    let moduleLoaded = false;
+    let reservedDisks = [];
 
     try {
       // Validate inputs
@@ -9932,6 +10044,9 @@ class PoolsService {
 
       await this._lockNonRaidDeviceChange(pool);
       deviceChangeLocked = true;
+      await this._assertDeviceNotInPool(pool, newDevice, await this._collectNonRaidMemberDisks(pool));
+      await this._assertDevicesUnused([newDevice]);
+      reservedDisks = await this._reserveDisks([newDevice]);
 
       // Check max parity devices
       const currentParityCount = pool.parity_devices?.length || 0;
@@ -9945,11 +10060,15 @@ class PoolsService {
 
       // Validate new parity device size against largest data device
       let largestDataSize = 0;
+      let largestDataDevice = null;
       for (const dataDev of pool.data_devices) {
         try {
           const device = await this.getRealDevicePathFromUuid(dataDev.id);
           const size = await this.getDeviceSize(device);
-          if (size > largestDataSize) largestDataSize = size;
+          if (size > largestDataSize) {
+            largestDataSize = size;
+            largestDataDevice = device;
+          }
         } catch (error) {
           console.warn(`Could not get size for data device ${dataDev.id}: ${error.message}`);
         }
@@ -9958,8 +10077,8 @@ class PoolsService {
       const newParitySize = await this.getDeviceSize(newDevice);
       if (largestDataSize > 0 && newParitySize < largestDataSize) {
         throw new Error(
-          `New parity device ${newDevice} (${(newParitySize / 1024 / 1024 / 1024).toFixed(2)} GB) ` +
-          `is smaller than largest data device (${(largestDataSize / 1024 / 1024 / 1024).toFixed(2)} GB)`
+          `New parity device ${newDevice} (${newParitySize} bytes) ` +
+          `is smaller than largest data device ${largestDataDevice} (${largestDataSize} bytes)`
         );
       }
 
@@ -9973,6 +10092,7 @@ class PoolsService {
       console.log('Loading md-nonraid kernel module...');
       const nonraidDatPath = '/boot/config/system/nonraid.dat';
       await execPromise(`modprobe md-nonraid super=${nonraidDatPath}`);
+      moduleLoaded = true;
 
       // Import all devices (including new parity)
       console.log('Importing devices into NonRAID array...');
@@ -10066,8 +10186,7 @@ class PoolsService {
     } catch (error) {
       console.error(`Error adding parity device to NonRAID pool: ${error.message}`);
 
-      // Before the lock the array was not touched
-      if (deviceChangeLocked) {
+      if (moduleLoaded) {
         // Cancel any running checks first (ignore errors)
         try {
           await execPromise('echo "nocheck CANCEL" > /proc/nmdcmd');
@@ -10086,6 +10205,7 @@ class PoolsService {
       throw new Error(`Error adding parity device to NonRAID pool: ${error.message}`);
     } finally {
       if (deviceChangeLocked) PoolsService._nonRaidDeviceChangeActive = false;
+      PoolHelpers.releaseDisks(reservedDisks);
     }
   }
 
