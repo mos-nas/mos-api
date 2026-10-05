@@ -6564,6 +6564,432 @@ router.get('/fsnavigator', async (req, res) => {
 
 /**
  * @swagger
+ * /mos/fsnavigator/calc:
+ *   post:
+ *     summary: Calculate directory size
+ *     description: Recursively calculates the total size of a directory and returns it in human-readable format based on user byte_format preference (admin only)
+ *     tags: [MOS]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - path
+ *             properties:
+ *               path:
+ *                 type: string
+ *                 description: Absolute path to the directory to calculate size for
+ *                 example: "/mnt/nvme/appdata"
+ *     responses:
+ *       200:
+ *         description: Directory size calculated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 path:
+ *                   type: string
+ *                   description: The directory path
+ *                   example: "/mnt/nvme/appdata"
+ *                 size:
+ *                   type: integer
+ *                   description: Total size in bytes
+ *                   example: 1073741824
+ *                 size_human:
+ *                   type: string
+ *                   description: Human readable size based on user byte_format preference
+ *                   example: "1.0 GiB"
+ *             example:
+ *               path: "/mnt/nvme/appdata"
+ *               size: 1073741824
+ *               size_human: "1.0 GiB"
+ *       400:
+ *         description: Path is not a directory or invalid request
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       404:
+ *         description: Path does not exist
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: Not authenticated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       403:
+ *         description: Admin permission required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+
+// POST: Calculate directory size
+router.post('/fsnavigator/calc', async (req, res) => {
+  try {
+    const { path: dirPath } = req.body;
+
+    if (!dirPath || typeof dirPath !== 'string') {
+      return res.status(400).json({ error: 'path is required' });
+    }
+
+    const result = await mosService.calculateDirectorySize(dirPath, req.user);
+    res.json(result);
+  } catch (error) {
+    if (error.message.includes('does not exist')) {
+      res.status(404).json({ error: error.message });
+    } else if (error.message.includes('not a directory')) {
+      res.status(400).json({ error: error.message });
+    } else {
+      res.status(500).json({ error: error.message });
+    }
+  }
+});
+
+/**
+ * @swagger
+ * /mos/fsnavigator/bookmarks:
+ *   get:
+ *     summary: List all filesystem bookmarks
+ *     description: Returns all saved filesystem bookmarks
+ *     tags: [MOS]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Array of bookmarks
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   name:
+ *                     type: string
+ *                     description: Display name of the bookmark
+ *                     example: "My Videos"
+ *                   path:
+ *                     type: string
+ *                     description: Absolute path the bookmark points to
+ *                     example: "/mnt/nvme/media/videos"
+ *             example:
+ *               - name: "My Videos"
+ *                 path: "/mnt/nvme/media/videos"
+ *               - name: "Backup Target"
+ *                 path: "/mnt/sata/backup"
+ *       401:
+ *         description: Not authenticated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *   post:
+ *     summary: Replace all filesystem bookmarks
+ *     description: Overwrites the entire bookmarks list with the provided array
+ *     tags: [MOS]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: array
+ *             items:
+ *               type: object
+ *               required:
+ *                 - name
+ *                 - path
+ *               properties:
+ *                 name:
+ *                   type: string
+ *                   description: Display name of the bookmark
+ *                 path:
+ *                   type: string
+ *                   description: Absolute path the bookmark points to
+ *           example:
+ *             - name: "My Videos"
+ *               path: "/mnt/nvme/media/videos"
+ *             - name: "Backup Target"
+ *               path: "/mnt/sata/backup"
+ *     responses:
+ *       200:
+ *         description: Bookmarks saved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 count:
+ *                   type: integer
+ *                   description: Number of bookmarks saved
+ *                   example: 2
+ *       400:
+ *         description: Invalid request data or duplicate entries
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: Not authenticated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *   put:
+ *     summary: Create a new filesystem bookmark
+ *     description: |
+ *       Add a new bookmark with a display name and path.
+ *       Returns 409 if a bookmark with the same name or path already exists.
+ *     tags: [MOS]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - name
+ *               - path
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 description: Display name for the bookmark
+ *                 example: "My Videos"
+ *               path:
+ *                 type: string
+ *                 description: Absolute path to bookmark
+ *                 example: "/mnt/nvme/media/videos"
+ *     responses:
+ *       201:
+ *         description: Bookmark created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 bookmark:
+ *                   type: object
+ *                   properties:
+ *                     name:
+ *                       type: string
+ *                     path:
+ *                       type: string
+ *             example:
+ *               success: true
+ *               bookmark:
+ *                 name: "My Videos"
+ *                 path: "/mnt/nvme/media/videos"
+ *       400:
+ *         description: Invalid request data
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       409:
+ *         description: Bookmark with same name or path already exists
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: Not authenticated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *   delete:
+ *     summary: Delete one or all filesystem bookmarks
+ *     description: |
+ *       With body: Delete a single bookmark identified by its path.
+ *       Without body: Delete all bookmarks.
+ *     tags: [MOS]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - path
+ *             properties:
+ *               path:
+ *                 type: string
+ *                 description: Path of the bookmark to delete
+ *                 example: "/mnt/nvme/media/videos"
+ *     responses:
+ *       200:
+ *         description: Bookmark(s) deleted successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               oneOf:
+ *                 - type: object
+ *                   properties:
+ *                     success:
+ *                       type: boolean
+ *                     deleted:
+ *                       type: object
+ *                       properties:
+ *                         name:
+ *                           type: string
+ *                         path:
+ *                           type: string
+ *                 - type: object
+ *                   properties:
+ *                     success:
+ *                       type: boolean
+ *                     deletedCount:
+ *                       type: integer
+ *             examples:
+ *               single:
+ *                 summary: Single bookmark deleted
+ *                 value:
+ *                   success: true
+ *                   deleted:
+ *                     name: "My Videos"
+ *                     path: "/mnt/nvme/media/videos"
+ *               all:
+ *                 summary: All bookmarks deleted
+ *                 value:
+ *                   success: true
+ *                   deletedCount: 3
+ *       404:
+ *         description: Bookmark not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: Not authenticated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+
+// GET: List all filesystem bookmarks
+router.get('/fsnavigator/bookmarks', async (req, res) => {
+  try {
+    const bookmarks = await mosService.getFsBookmarks();
+    res.json(bookmarks);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST: Replace all filesystem bookmarks
+router.post('/fsnavigator/bookmarks', async (req, res) => {
+  try {
+    const bookmarks = req.body;
+
+    if (!Array.isArray(bookmarks)) {
+      return res.status(400).json({ error: 'Request body must be an array of bookmarks' });
+    }
+
+    const count = await mosService.setFsBookmarks(bookmarks);
+    res.json({ success: true, count });
+  } catch (error) {
+    if (error.message.includes('must be an array') || error.message.includes('missing name or path') || error.message.includes('Duplicate')) {
+      res.status(400).json({ error: error.message });
+    } else {
+      res.status(500).json({ error: error.message });
+    }
+  }
+});
+
+// PUT: Create a new filesystem bookmark
+router.put('/fsnavigator/bookmarks', async (req, res) => {
+  try {
+    const { name, path: filePath } = req.body;
+
+    if (!name || typeof name !== 'string' || !filePath || typeof filePath !== 'string') {
+      return res.status(400).json({ error: 'Bookmark name and path are required' });
+    }
+
+    const bookmark = await mosService.addFsBookmark(name, filePath);
+    res.status(201).json({ success: true, bookmark });
+  } catch (error) {
+    if (error.message.includes('already exists')) {
+      res.status(409).json({ error: error.message });
+    } else {
+      res.status(500).json({ error: error.message });
+    }
+  }
+});
+
+// DELETE: Delete a single bookmark by path, or all bookmarks if no body
+router.delete('/fsnavigator/bookmarks', async (req, res) => {
+  try {
+    if (req.body && req.body.path) {
+      const deleted = await mosService.deleteFsBookmark(req.body.path);
+      res.json({ success: true, deleted });
+    } else {
+      const count = await mosService.clearAllFsBookmarks();
+      res.json({ success: true, deletedCount: count });
+    }
+  } catch (error) {
+    if (error.message.includes('Bookmark not found')) {
+      res.status(404).json({ error: error.message });
+    } else {
+      res.status(500).json({ error: error.message });
+    }
+  }
+});
+
+/**
+ * @swagger
  * /mos/download:
  *   get:
  *     summary: Download a file from the filesystem

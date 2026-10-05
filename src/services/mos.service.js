@@ -23,6 +23,7 @@ class MosService {
     this.tokensPath = '/boot/config/system/tokens.json';
     this.notifyProvidersPath = '/boot/config/notify/providers';
     this.rsyncConfigPath = '/boot/config/system/rsync/rsyncd.conf';
+    this.fsBookmarksPath = '/boot/config/system/fs-bookmarks.json';
 
     // Sensors config cache
     this._sensorsConfigCache = null;
@@ -6707,6 +6708,178 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
 
     // Browse without restrictions
     return await this._browseDirectory(resolvedPath, type, null, includeHidden, user);
+  }
+
+  /**
+   * Calculate the total size of a directory recursively
+   */
+  async calculateDirectorySize(dirPath, user = null) {
+    const resolvedPath = path.resolve(dirPath);
+
+    let stats;
+    try {
+      stats = await fs.stat(resolvedPath);
+    } catch (error) {
+      if (error.code === 'ENOENT') {
+        throw new Error('Path does not exist');
+      }
+      throw error;
+    }
+
+    if (!stats.isDirectory()) {
+      throw new Error('Path is not a directory');
+    }
+
+    const { stdout } = await execPromise(`du -sb "${resolvedPath}" | cut -f1`);
+    const sizeBytes = parseInt(stdout.trim(), 10);
+
+    return {
+      path: resolvedPath,
+      size: sizeBytes,
+      size_human: systemService.formatBytes(sizeBytes, user)
+    };
+  }
+
+  /**
+   * Read bookmarks from the filesystem bookmarks file
+   * @private
+   * @returns {Promise<Array>} Array of bookmark objects
+   */
+  async _readFsBookmarks() {
+    try {
+      const data = await fs.readFile(this.fsBookmarksPath, 'utf8');
+      const bookmarks = JSON.parse(data);
+      return Array.isArray(bookmarks) ? bookmarks : [];
+    } catch (error) {
+      if (error.code === 'ENOENT') return [];
+      throw error;
+    }
+  }
+
+  /**
+   * Write bookmarks to the filesystem bookmarks file
+   * @private
+   * @param {Array} bookmarks - Array of bookmark objects to write
+   */
+  async _writeFsBookmarks(bookmarks) {
+    const dir = path.dirname(this.fsBookmarksPath);
+    try {
+      await fs.mkdir(dir, { recursive: true });
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+    }
+    await fs.writeFile(this.fsBookmarksPath, JSON.stringify(bookmarks, null, 2), 'utf8');
+  }
+
+  /**
+   * Get all filesystem bookmarks
+   * @returns {Promise<Array>} Array of bookmark objects
+   */
+  async getFsBookmarks() {
+    return await this._readFsBookmarks();
+  }
+
+  /**
+   * Replace all filesystem bookmarks with the provided list
+   * @param {Array} bookmarks - Array of bookmark objects {name, path}
+   * @returns {Promise<number>} Number of bookmarks saved
+   */
+  async setFsBookmarks(bookmarks) {
+    if (!Array.isArray(bookmarks)) {
+      throw new Error('Bookmarks must be an array');
+    }
+
+    const validated = bookmarks.map((b, index) => {
+      const name = b?.name?.trim();
+      const filePath = b?.path?.trim();
+
+      if (!name || !filePath) {
+        throw new Error(`Bookmark at index ${index} is missing name or path`);
+      }
+
+      return { name, path: filePath };
+    });
+
+    const names = validated.map(b => b.name);
+    const paths = validated.map(b => b.path);
+    const duplicateNames = names.filter((n, i) => names.indexOf(n) !== i);
+    const duplicatePaths = paths.filter((p, i) => paths.indexOf(p) !== i);
+
+    if (duplicateNames.length > 0) {
+      throw new Error(`Duplicate bookmark name(s): ${duplicateNames.join(', ')}`);
+    }
+
+    if (duplicatePaths.length > 0) {
+      throw new Error(`Duplicate bookmark path(s): ${duplicatePaths.join(', ')}`);
+    }
+
+    await this._writeFsBookmarks(validated);
+    return validated.length;
+  }
+
+  /**
+   * Add a new filesystem bookmark
+   * @param {string} name - Display name for the bookmark
+   * @param {string} filePath - Absolute path to bookmark
+   * @returns {Promise<Object>} The created bookmark object
+   */
+  async addFsBookmark(name, filePath) {
+    const trimmedName = name?.trim();
+    const trimmedPath = filePath?.trim();
+
+    if (!trimmedName || !trimmedPath) {
+      throw new Error('Bookmark name and path are required');
+    }
+
+    const bookmarks = await this._readFsBookmarks();
+
+    if (bookmarks.some(b => b.name === trimmedName)) {
+      throw new Error(`Bookmark with name '${trimmedName}' already exists`);
+    }
+
+    if (bookmarks.some(b => b.path === trimmedPath)) {
+      throw new Error(`Bookmark for path '${trimmedPath}' already exists`);
+    }
+
+    const bookmark = { name: trimmedName, path: trimmedPath };
+    bookmarks.push(bookmark);
+    await this._writeFsBookmarks(bookmarks);
+    return bookmark;
+  }
+
+  /**
+   * Delete a filesystem bookmark by path
+   * @param {string} filePath - The path of the bookmark to delete
+   * @returns {Promise<Object>} The deleted bookmark object
+   */
+  async deleteFsBookmark(filePath) {
+    const trimmedPath = filePath?.trim();
+
+    if (!trimmedPath) {
+      throw new Error('Path is required');
+    }
+
+    const bookmarks = await this._readFsBookmarks();
+    const index = bookmarks.findIndex(b => b.path === trimmedPath);
+
+    if (index === -1) {
+      throw new Error(`Bookmark not found for path '${trimmedPath}'`);
+    }
+
+    const [deleted] = bookmarks.splice(index, 1);
+    await this._writeFsBookmarks(bookmarks);
+    return deleted;
+  }
+
+  /**
+   * Clear all filesystem bookmarks
+   * @returns {Promise<number>} Number of bookmarks deleted
+   */
+  async clearAllFsBookmarks() {
+    const bookmarks = await this._readFsBookmarks();
+    const count = bookmarks.length;
+    await this._writeFsBookmarks([]);
+    return count;
   }
 
   /**

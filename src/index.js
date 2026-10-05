@@ -111,6 +111,10 @@ async function startServer() {
     customCss: '.swagger-ui .topbar { display: none }',
     customSiteTitle: 'MOS API Documentation',
     swaggerOptions: {
+      docExpansion: "list",
+      defaultModelsExpandDepth: 2,
+      defaultModelExpandDepth: 2,
+      deepLinking: true,
       persistAuthorization: true,
       displayRequestDuration: true
     }
