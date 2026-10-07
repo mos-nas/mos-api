@@ -195,6 +195,50 @@ class DockerService {
   }
 
   /**
+   * Get all containers with their image sizes
+   * @param {Object} user - User object for byte format preference
+   * @returns {Promise<Array>} List of containers with name, repository, size, size_human
+   */
+  async getContainerImageSizes(user = null) {
+    const dockerConfig = {
+      socketPath: '/var/run/docker.sock',
+      validateStatus: () => true,
+      timeout: 30000,
+      responseType: 'json'
+    };
+
+    // Fetch containers and images in parallel
+    const [containersRes, imagesRes] = await Promise.all([
+      axios.get('http://localhost/containers/json', dockerConfig),
+      axios.get('http://localhost/images/json', dockerConfig)
+    ]);
+
+    const containers = containersRes.data || [];
+    const images = imagesRes.data || [];
+
+    // Build image ID → size map
+    const imageSizeMap = new Map();
+    for (const image of images) {
+      imageSizeMap.set(image.Id, image.Size);
+    }
+
+    // Build result, sorted by size descending
+    const result = containers.map(container => {
+      const name = (container.Names?.[0] || '').replace(/^\//, '');
+      const size = imageSizeMap.get(container.ImageID) || 0;
+      return {
+        name,
+        repository: container.Image || '',
+        size,
+        size_human: systemService.formatBytes(size, user)
+      };
+    });
+
+    result.sort((a, b) => b.size - a.size);
+    return result;
+  }
+
+  /**
    * Executes the Docker update script
    * @param {string} [name] - Optional name of the container to update
    * @returns {Promise<Object>} Result of the update check

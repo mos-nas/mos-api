@@ -2144,6 +2144,60 @@ class VmService {
   }
 
   /**
+   * Calculate disk sizes for a VM
+   * For file-based disks uses qemu-img actual-size, for block devices uses blockdev
+   * Returns per-disk sizes plus totals
+   * @param {string} vmName - Name of the VM
+   * @param {Object} user - User object with byte_format preference
+   * @returns {Promise<Object>} Disk size calculation results
+   */
+  async calculateVmDiskSizes(vmName, user = null) {
+    // Get VM config which already contains parsed disk sizes
+    const config = await this.getVmConfig(vmName);
+
+    const results = [];
+    let totalSize = 0;
+
+    for (const disk of config.disks) {
+      let size = null;
+      let sizeHuman = null;
+
+      try {
+        if (disk.diskType === 'file') {
+          // File-based disk: use actual size (sparse-aware)
+          size = disk.actualSize;
+          sizeHuman = disk.actualSizeHuman;
+        } else {
+          // Block device: use full size
+          size = disk.size;
+          sizeHuman = disk.sizeHuman;
+        }
+
+        if (size !== null) {
+          totalSize += size;
+        }
+      } catch (e) {
+        // Disk file might not exist or command failed - keep null values
+      }
+
+      results.push({
+        path: disk.source,
+        size: size !== null ? size : null,
+        size_human: sizeHuman !== null ? sizeHuman : '0 B',
+        type: disk.diskType,
+        format: disk.format,
+        target: disk.target
+      });
+    }
+
+    return {
+      disks: results,
+      total_size: totalSize,
+      total_size_human: this.formatBytes(totalSize, user)
+    };
+  }
+
+  /**
    * Update VM with simplified configuration
    * @param {string} vmName - Name of the VM
    * @param {Object} updates - Configuration updates

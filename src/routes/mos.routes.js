@@ -4934,11 +4934,17 @@ router.get('/bootbackupfiles', async (req, res) => {
  *                 description: Optional path to tar backup file for restoration
  *                 default: ""
  *                 example: "/mnt/cache/backup/boot/backup-2026-05-31_05-00-09.tar"
+ *               backup_label:
+ *                 type: boolean
+ *                 description: Whether to add backup label
+ *                 default: false
+ *                 example: false
  *           example:
  *             disk: "/dev/sda"
  *             filesystem: "ext4"
  *             extra_partition: false
  *             tar_file: "/mnt/cache/backup/boot/backup-2026-05-31_05-00-09.tar"
+ *             backup_label: false
  *     responses:
  *       200:
  *         description: MOS installation to disk initiated successfully
@@ -5014,7 +5020,7 @@ router.get('/bootbackupfiles', async (req, res) => {
 // POST: Install MOS to disk
 router.post('/installtodisk', async (req, res) => {
   try {
-    const { disk, filesystem, extra_partition = false, tar_file = '' } = req.body;
+    const { disk, filesystem, extra_partition = false, tar_file = '', backup_label = false } = req.body;
 
     if (!disk) {
       return res.status(400).json({
@@ -5030,7 +5036,7 @@ router.post('/installtodisk', async (req, res) => {
       });
     }
 
-    const result = await mosService.installToDisk(disk, filesystem, extra_partition, tar_file);
+    const result = await mosService.installToDisk(disk, filesystem, extra_partition, tar_file, backup_label);
 
     if (result.success) {
       res.json(result);

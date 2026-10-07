@@ -6233,9 +6233,10 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
    * @param {string} filesystem - Filesystem type (vfat, ext4, btrfs, xfs)
    * @param {boolean} extra_partition - Whether to create an extra partition (default: false)
    * @param {string} tar_file - Optional tar file path to restore from backup (default: '')
+    * @param {boolean} backup_label - Whether to add backup label (default: false)
    * @returns {Promise<Object>} Installation status
    */
-  async installToDisk(disk, filesystem, extra_partition = false, tar_file = '') {
+  async installToDisk(disk, filesystem, extra_partition = false, tar_file = '', backup_label = false) {
     try {
       // Parameter validation
       if (!disk || typeof disk !== 'string') {
@@ -6252,8 +6253,8 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
         throw new Error(`filesystem must be one of: ${validFilesystems.join(', ')}`);
       }
 
-      // Build command: bash /usr/local/bin/mos-install disk filesystem quiet extra_partition api tar_file
-      const command = `bash /usr/local/bin/mos-install ${disk} ${filesystem} quiet ${extra_partition} api ${tar_file}`;
+      // Build command: bash /usr/local/bin/mos-install disk filesystem quiet extra_partition api tar_file backup_label
+      const command = `bash /usr/local/bin/mos-install ${disk} ${filesystem} quiet ${extra_partition} api ${tar_file} ${backup_label}`;
 
       // Execute script
       const { stdout, stderr } = await execPromise(command);
@@ -6265,6 +6266,7 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
         filesystem,
         extra_partition,
         tar_file,
+        backup_label,
         command,
         output: stdout,
         error: null,
@@ -6280,6 +6282,7 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
         filesystem: filesystem || null,
         extra_partition: extra_partition || null,
         tar_file: tar_file || null,
+        backup_label: backup_label || null,
         timestamp: new Date().toISOString()
       };
     }

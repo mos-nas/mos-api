@@ -1554,6 +1554,112 @@ router.put('/machines/:name/config', async (req, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /vm/machines/{name}/calc:
+ *   get:
+ *     summary: Calculate VM disk sizes
+ *     description: Calculates the total disk usage for a VM, including all attached disks (file-based and block devices). File-based disks use actual (sparse-aware) size. CD-ROMs are excluded.
+ *     tags: [VM]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: name
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: VM Name
+ *         example: "my-ubuntu-vm"
+ *     responses:
+ *       200:
+ *         description: VM disk sizes calculated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 disks:
+ *                   type: array
+ *                   description: Per-disk size information
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       path:
+ *                         type: string
+ *                         description: Disk source path
+ *                       size:
+ *                         type: integer
+ *                         nullable: true
+ *                         description: Size in bytes (null if unavailable)
+ *                       size_human:
+ *                         type: string
+ *                         description: Human readable size based on user byte_format preference
+ *                       type:
+ *                         type: string
+ *                         enum: [file, block]
+ *                         description: Disk type
+ *                       format:
+ *                         type: string
+ *                         description: Disk format (qcow2, raw, etc.)
+ *                       target:
+ *                         type: string
+ *                         description: Target device name
+ *                 total_size:
+ *                   type: integer
+ *                   description: Total size of all disks in bytes
+ *                 total_size_human:
+ *                   type: string
+ *                   description: Human readable total size based on user byte_format preference
+ *             example:
+ *               disks:
+ *                 - path: "/var/lib/libvirt/images/my-vm-disk1.qcow2"
+ *                   size: 1073741824
+ *                   size_human: "1.0 GiB"
+ *                   type: "file"
+ *                   format: "qcow2"
+ *                   target: "vda"
+ *               total_size: 1073741824
+ *               total_size_human: "1.0 GiB"
+ *       404:
+ *         description: VM does not exist
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: Not authenticated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       403:
+ *         description: Admin permission required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+router.get('/machines/:name/calc', async (req, res) => {
+  try {
+    const { name } = req.params;
+    const result = await vmService.calculateVmDiskSizes(name, req.user);
+    res.json(result);
+  } catch (error) {
+    if (error.message.includes('not found') || error.message.includes('does not exist')) {
+      res.status(404).json({ error: error.message });
+    } else {
+      res.status(500).json({ error: error.message });
+    }
+  }
+});
+
 // ============================================================
 // VirtIO ISO Management
 // ============================================================

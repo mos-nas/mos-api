@@ -494,6 +494,69 @@ router.get('/mos/containers', async (req, res) => {
 
 /**
  * @swagger
+ * /docker/mos/containers/calc:
+ *   get:
+ *     summary: Get container image sizes
+ *     description: Get a list of all Docker containers with their image names and sizes, sorted by size descending (admin only)
+ *     tags: [Docker]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Container image sizes retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   name:
+ *                     type: string
+ *                     description: Container name
+ *                     example: "Debian-Builder-Bullseye"
+ *                   repository:
+ *                     type: string
+ *                     description: Image repository name
+ *                     example: "git.minenet.at/ich777/debian-builder:bullseye"
+ *                   size:
+ *                     type: integer
+ *                     description: Image size in bytes
+ *                     example: 2295826356
+ *                   size_human:
+ *                     type: string
+ *                     description: Human-readable image size
+ *                     example: "2.1 GiB"
+ *       401:
+ *         description: Not authenticated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       403:
+ *         description: Admin permission required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+router.get('/mos/containers/calc', async (req, res) => {
+  try {
+    const result = await dockerService.getContainerImageSizes(req.user);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @swagger
  * /docker/mos/ports:
  *   get:
  *     summary: Get Docker container port bindings

@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const lxcService = require('../services/lxc.service');
+const mosService = require('../services/mos.service');
 const { checkRole } = require('../middleware/auth.middleware');
 
 /**
@@ -2126,6 +2127,95 @@ router.post('/containers/:name/snapshots/:snapshot/clone', async (req, res) => {
       return res.status(400).json({ error: error.message });
     }
     res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @swagger
+ * /lxc/containers/{name}/calc:
+ *   get:
+ *     summary: Calculate container rootfs size
+ *     description: Recursively calculates the total size of a container's rootfs and returns it in human-readable format based on user byte_format preference (admin only)
+ *     tags: [LXC]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: name
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Container Name
+ *         example: "my-ubuntu-container"
+ *     responses:
+ *       200:
+ *         description: Container rootfs size calculated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 path:
+ *                   type: string
+ *                   description: The rootfs directory path
+ *                 size:
+ *                   type: integer
+ *                   description: Total size in bytes
+ *                 size_human:
+ *                   type: string
+ *                   description: Human readable size based on user byte_format preference
+ *             example:
+ *               path: "/var/lib/lxc/my-ubuntu-container/rootfs"
+ *               size: 1073741824
+ *               size_human: "1.0 GiB"
+ *       400:
+ *         description: Container does not exist or path is invalid
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: Not authenticated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       403:
+ *         description: Admin permission required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+router.get('/containers/:name/calc', async (req, res) => {
+  try {
+    const { name } = req.params;
+
+    // Check if container exists
+    const exists = await lxcService.containerExists(name);
+    if (!exists) {
+      return res.status(400).json({ error: `Container ${name} does not exist` });
+    }
+
+    const lxcPath = await lxcService.getLxcPath();
+    const rootfsPath = `${lxcPath}/${name}/rootfs`;
+
+    const result = await mosService.calculateDirectorySize(rootfsPath, req.user);
+    res.json(result);
+  } catch (error) {
+    if (error.message.includes('does not exist')) {
+      res.status(404).json({ error: error.message });
+    } else if (error.message.includes('not a directory')) {
+      res.status(400).json({ error: error.message });
+    } else {
+      res.status(500).json({ error: error.message });
+    }
   }
 });
 
