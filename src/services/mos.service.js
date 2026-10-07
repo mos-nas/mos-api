@@ -23,6 +23,8 @@ class MosService {
     this.tokensPath = '/boot/config/system/tokens.json';
     this.notifyProvidersPath = '/boot/config/notify/providers';
     this.rsyncConfigPath = '/boot/config/system/rsync/rsyncd.conf';
+    this.sambaGlobalConfigPath = '/boot/config/system/samba/global_extra.conf';
+    this.sambaSharesConfigPath = '/boot/config/system/samba/shares_extra.conf';
     this.fsBookmarksPath = '/boot/config/system/fs-bookmarks.json';
 
     // Sensors config cache
@@ -4031,6 +4033,117 @@ class MosService {
     }
 
     return { ...result, path: this.rsyncConfigPath, changed, restarted };
+  }
+
+  async getSambaConfig() {
+    let globalContent = null;
+    try {
+      globalContent = (await this.readFile(this.sambaGlobalConfigPath)).content;
+    } catch (error) {
+      if (!error.message.includes('File does not exist')) throw error;
+    }
+
+    let sharesContent = null;
+    try {
+      sharesContent = (await this.readFile(this.sambaSharesConfigPath)).content;
+    } catch (error) {
+      if (!error.message.includes('File does not exist')) throw error;
+    }
+
+    return { global: globalContent, shares: sharesContent };
+  }
+
+  /**
+   * Writes the Samba extra configuration files, then restarts smbd (and nmbd/wsddn
+   * if samba_discovery is enabled) when any content actually changed and the
+   * samba service is enabled.
+   * @param {Object} config - Configuration with optional global and shares content
+   * @param {boolean} createBackup - Whether to keep .backup copies of previous configs
+   * @returns {Promise<Object>} Result with backup paths plus change/restart info
+   */
+  async updateSambaConfig(config, createBackup = false) {
+    if (typeof config !== 'object' || config === null) {
+      throw new Error('config must be an object');
+    }
+
+    const { global: globalContent, shares: sharesContent } = config;
+
+    // Treat null as empty string
+    const normalizedGlobal = globalContent === null ? '' : globalContent;
+    const normalizedShares = sharesContent === null ? '' : sharesContent;
+
+    // Validate content types if provided
+    if (normalizedGlobal !== undefined && typeof normalizedGlobal !== 'string') {
+      throw new Error('global must be a string');
+    }
+    if (normalizedShares !== undefined && typeof normalizedShares !== 'string') {
+      throw new Error('shares must be a string');
+    }
+
+    let previousGlobal = null;
+    try {
+      previousGlobal = (await this.readFile(this.sambaGlobalConfigPath)).content;
+    } catch (error) {
+      if (!error.message.includes('File does not exist')) throw error;
+    }
+
+    let previousShares = null;
+    try {
+      previousShares = (await this.readFile(this.sambaSharesConfigPath)).content;
+    } catch (error) {
+      if (!error.message.includes('File does not exist')) throw error;
+    }
+
+    const backupPaths = [];
+    let globalChanged = false;
+    let sharesChanged = false;
+
+    // Process global config
+    if (normalizedGlobal !== undefined) {
+      await fs.mkdir(path.dirname(this.sambaGlobalConfigPath), { recursive: true });
+
+      if (previousGlobal === null) {
+        await fs.writeFile(this.sambaGlobalConfigPath, '', 'utf8');
+      }
+
+      const result = await this.editFile(this.sambaGlobalConfigPath, normalizedGlobal, createBackup);
+      if (createBackup && result.backupPath) {
+        backupPaths.push(result.backupPath);
+      }
+      globalChanged = previousGlobal !== normalizedGlobal;
+    }
+
+    // Process shares config
+    if (normalizedShares !== undefined) {
+      await fs.mkdir(path.dirname(this.sambaSharesConfigPath), { recursive: true });
+
+      if (previousShares === null) {
+        await fs.writeFile(this.sambaSharesConfigPath, '', 'utf8');
+      }
+
+      const result = await this.editFile(this.sambaSharesConfigPath, normalizedShares, createBackup);
+      if (createBackup && result.backupPath) {
+        backupPaths.push(result.backupPath);
+      }
+      sharesChanged = previousShares !== normalizedShares;
+    }
+
+    const changed = globalChanged || sharesChanged;
+
+    let restarted = false;
+    if (changed) {
+      const services = await this._getNetworkServicesStatus();
+      if (services.samba?.enabled === true) {
+        await execPromise('/etc/init.d/smbd restart');
+        restarted = true;
+      }
+      if (services.samba_discovery?.enabled === true) {
+        await execPromise('/etc/init.d/nmbd restart');
+        await execPromise('/etc/init.d/wsddn restart');
+      }
+    }
+
+    return { changed, restarted, backupPaths };
   }
 
   /**

@@ -2140,6 +2140,166 @@ router.post('/settings/network/services/rsync/config', checkRole(['admin']), asy
 
 /**
  * @swagger
+ * /mos/settings/network/services/samba/config:
+ *   get:
+ *     summary: Get Samba extra configuration
+ *     description: Read the Samba extra configuration files stored in /boot/config/system/samba/ (admin only). Returns global_extra.conf and shares_extra.conf content.
+ *     tags: [MOS]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Configuration retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 global:
+ *                   type: string
+ *                   nullable: true
+ *                   description: Content of global_extra.conf, null if file does not exist
+ *                   example: "server min protocol = SMB2\n"
+ *                 shares:
+ *                   type: string
+ *                   nullable: true
+ *                   description: Content of shares_extra.conf, null if file does not exist
+ *                   example: "[custom]\n  path = /mnt/pool/custom\n  read only = no\n"
+ *       401:
+ *         description: Not authenticated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       403:
+ *         description: Admin permission required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *   post:
+ *     summary: Update Samba extra configuration
+ *     description: |
+ *       Writes the Samba extra configuration files to /boot/config/system/samba/, creating
+ *       the directory and files if they do not exist yet. Only provided fields are written.
+ *       When any content actually changed and the samba service is enabled, the smbd daemon
+ *       is restarted. If samba_discovery is also enabled, nmbd and wsddn are restarted as well.
+ *       Null values are treated as empty strings.
+ *     tags: [MOS]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               global:
+ *                 type: string
+ *                 description: New global_extra.conf content
+ *                 example: "server min protocol = SMB2\n"
+ *               shares:
+ *                 type: string
+ *                 description: New shares_extra.conf content
+ *                 example: "[custom]\n  path = /mnt/pool/custom\n  read only = no\n"
+ *               create_backup:
+ *                 type: boolean
+ *                 description: Whether to create backup files with .backup extension
+ *                 example: false
+ *                 default: false
+ *     responses:
+ *       200:
+ *         description: Configuration updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 changed:
+ *                   type: boolean
+ *                   description: Whether any content differed from the stored config
+ *                   example: true
+ *                 restarted:
+ *                   type: boolean
+ *                   description: Whether the smbd daemon was restarted
+ *                   example: true
+ *                 backupPaths:
+ *                   type: array
+ *                   description: Paths to backup files created
+ *                   items:
+ *                     type: string
+ *                   example: ["/boot/config/system/samba/global_extra.conf.backup"]
+ *       400:
+ *         description: Bad request - missing or invalid content
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: Not authenticated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       403:
+ *         description: Admin permission required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+
+// GET: Read Samba extra configuration
+router.get('/settings/network/services/samba/config', checkRole(['admin']), async (req, res) => {
+  try {
+    const result = await mosService.getSambaConfig();
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST: Update Samba extra configuration
+router.post('/settings/network/services/samba/config', checkRole(['admin']), async (req, res) => {
+  try {
+    const { global, shares, create_backup = false } = req.body || {};
+
+    if (global === undefined && shares === undefined) {
+      return res.status(400).json({ error: 'At least one of global or shares must be provided' });
+    }
+
+    const config = {};
+    if (global !== undefined) config.global = global;
+    if (shares !== undefined) config.shares = shares;
+
+    const result = await mosService.updateSambaConfig(config, create_backup);
+    res.json(result);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @swagger
  * /mos/settings/system:
  *   get:
  *     summary: Get system settings
