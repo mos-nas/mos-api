@@ -6367,7 +6367,7 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
       }
 
       // Build command: bash /usr/local/bin/mos-install disk filesystem quiet extra_partition api tar_file backup_label
-      const command = `bash /usr/local/bin/mos-install ${disk} ${filesystem} quiet ${extra_partition} api ${tar_file} ${backup_label}`;
+      const command = `bash /usr/local/bin/mos-install "${disk}" "${filesystem}" quiet "${extra_partition}" api "${tar_file}" "${backup_label}"`;
 
       // Execute script
       const { stdout, stderr } = await execPromise(command);
