@@ -339,6 +339,16 @@ class DockerComposeService {
     const iconDir = '/var/lib/docker/mos/icons/compose';
     const iconPath = path.join(iconDir, `${stackName}.png`);
 
+    // MDI icons are handled by the frontend
+    if (iconUrl.startsWith('mdi-')) {
+      try {
+        await fs.unlink(iconPath);
+      } catch (err) {
+        // File doesn't exist
+      }
+      return null;
+    }
+
     try {
       // Download icon
       const response = await axios.get(iconUrl, {
