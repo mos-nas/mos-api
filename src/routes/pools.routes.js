@@ -751,6 +751,18 @@ router.patch('/:id/comment', checkRole(['admin']), async (req, res) => {
  *                 sync:
  *                   enabled: true
  *                   schedule: "0 4 * * *"
+ *                 spindown:
+ *                   data_devices:
+ *                     - slot: 1
+ *                       device: /dev/sdk1
+ *                       value: 300
+ *                     - slot: 2
+ *                       device: /dev/sdl1
+ *                       value: null
+ *                   parity_devices:
+ *                     - slot: 1
+ *                       device: /dev/sdm1
+ *                       value: null
  *       404:
  *         description: Pool not found
  *       500:
@@ -806,6 +818,47 @@ router.patch('/:id/comment', checkRole(['admin']), async (req, res) => {
  *                 type: integer
  *                 description: "Usage alert threshold in percent (default 90). 0 disables the alert level. warning=0 AND alert=0 disables usage monitoring for the pool."
  *                 example: 90
+ *               spindown:
+ *                 type: object
+ *                 description: "Per-device spindown configuration mirroring pool structure. value is minutes (>= 0), null, or empty string to use global spindown from system.json."
+ *                 properties:
+ *                   data_devices:
+ *                     type: array
+ *                     items:
+ *                       type: object
+ *                       properties:
+ *                         slot:
+ *                           type: integer
+ *                           description: Data device slot number (1-based)
+ *                         value:
+ *                           oneOf:
+ *                             - type: integer
+ *                               minimum: 0
+ *                             - type: "null"
+ *                           description: Spindown timeout in minutes, or null to use global setting
+ *                   parity_devices:
+ *                     type: array
+ *                     items:
+ *                       type: object
+ *                       properties:
+ *                         slot:
+ *                           type: integer
+ *                           description: Parity device slot number (1-based)
+ *                         value:
+ *                           oneOf:
+ *                             - type: integer
+ *                               minimum: 0
+ *                             - type: "null"
+ *                           description: Spindown timeout in minutes, or null to use global setting
+ *                 example:
+ *                   data_devices:
+ *                     - slot: 1
+ *                       value: 300
+ *                     - slot: 2
+ *                       value: null
+ *                   parity_devices:
+ *                     - slot: 1
+ *                       value: null
  *           examples:
  *             shared:
  *               summary: Toggle shared status

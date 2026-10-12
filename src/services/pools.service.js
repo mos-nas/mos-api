@@ -7095,7 +7095,26 @@ class PoolsService {
         await this._writePools(pools);
       }
 
-      return pool.config || {};
+      const config = { ...(pool.config || {}) };
+
+      // Inject device paths so we can display them
+      await this._injectRealDevicePaths(pool);
+
+      // Include per-device spindown values in response (mirrors pool structure)
+      config.spindown = {
+        data_devices: (pool.data_devices || []).map(d => ({
+          slot: parseInt(d.slot, 10),
+          device: d.device || null,
+          value: d.spindown || null
+        })),
+        parity_devices: (pool.parity_devices || []).map(d => ({
+          slot: parseInt(d.slot, 10),
+          device: d.device || null,
+          value: d.spindown || null
+        }))
+      };
+
+      return config;
     } catch (error) {
       throw new Error(`Error getting pool config: ${error.message}`);
     }
@@ -7128,9 +7147,16 @@ class PoolsService {
       const prevUsageAlert = pool.config.usage_alert;
       const usageWasEnabled = !prevUsageAlert || prevUsageAlert.warning !== 0 || prevUsageAlert.alert !== 0;
 
+      // Handle per-device spindown updates (stored on device objects, not in pool.config)
+      let spindownChangedDevices = [];
+      if (configUpdates.spindown !== undefined) {
+        spindownChangedDevices = this._applySpindownConfig(pool, configUpdates.spindown);
+      }
+
       // Update config with provided values
       // Supports both direct properties and dot-notation (e.g., "sync.enabled")
       Object.keys(configUpdates).forEach(key => {
+        if (key === 'spindown') return;
         if (key.includes('.')) {
           // Use dot-notation for nested properties
           this._setDotNotation(pool.config, key, configUpdates[key]);
@@ -7174,6 +7200,11 @@ class PoolsService {
         console.warn(`Failed to execute mos-cron_update: ${cronError.message}`);
       }
 
+      // Restart spindown watchdogs for devices with changed spindown values
+      if (spindownChangedDevices.length > 0) {
+        await this._restartSpindownForDevices(pool, spindownChangedDevices);
+      }
+
       return {
         success: true,
         message: `Configuration updated for pool "${pool.name}" (ID: ${poolId})`,
@@ -7182,6 +7213,143 @@ class PoolsService {
       };
     } catch (error) {
       throw new Error(`Error updating pool config: ${error.message}`);
+    }
+  }
+
+  /**
+   * Apply spindown configuration from config update to pool devices.
+   * Validates input, updates device.spindown fields, returns list of changed device identifiers.
+   * Input format: { data_devices: [{ slot, value }], parity_devices: [{ slot, value }] }
+   * @param {Object} pool - Pool object
+   * @param {Object} spindownUpdates - Spindown config update object
+   * @returns {Array<string>} Device identifiers (type:slot) whose spindown value changed
+   * @private
+   */
+  _applySpindownConfig(pool, spindownUpdates) {
+    if (!spindownUpdates || typeof spindownUpdates !== 'object') {
+      throw new Error('spindown must be an object with data_devices and parity_devices arrays');
+    }
+
+    const changedDevices = [];
+
+    // Process data_devices
+    if (spindownUpdates.data_devices !== undefined) {
+      if (!Array.isArray(spindownUpdates.data_devices)) {
+        throw new Error('spindown.data_devices must be an array');
+      }
+      for (const entry of spindownUpdates.data_devices) {
+        if (this._applySpindownToDevice(pool.data_devices, entry, 'data')) {
+          changedDevices.push(`data:${entry.slot}`);
+        }
+      }
+    }
+
+    // Process parity_devices
+    if (spindownUpdates.parity_devices !== undefined) {
+      if (!Array.isArray(spindownUpdates.parity_devices)) {
+        throw new Error('spindown.parity_devices must be an array');
+      }
+      for (const entry of spindownUpdates.parity_devices) {
+        if (this._applySpindownToDevice(pool.parity_devices, entry, 'parity')) {
+          changedDevices.push(`parity:${entry.slot}`);
+        }
+      }
+    }
+
+    return changedDevices;
+  }
+
+  /**
+   * Apply a single spindown update to a device in the given device list.
+   * @param {Array} devices - Device array (data_devices or parity_devices)
+   * @param {Object} entry - { slot, value }
+   * @param {string} type - 'data' or 'parity'
+   * @returns {boolean} - True if the spindown value changed
+   * @private
+   */
+  _applySpindownToDevice(devices, entry, type) {
+    if (!entry || typeof entry.slot === 'undefined') {
+      throw new Error(`Each spindown entry must have a slot property`);
+    }
+
+    const slot = parseInt(entry.slot, 10);
+    if (isNaN(slot) || slot < 1) {
+      throw new Error(`Invalid spindown slot: ${entry.slot}`);
+    }
+
+    // Validate spindown value: number >= 0 or null (empty string treated as null)
+    let spindownValue;
+    if (entry.value === null || entry.value === undefined || entry.value === "") {
+      spindownValue = null;
+    } else {
+      const num = parseInt(entry.value, 10);
+      if (isNaN(num) || num < 0) {
+        throw new Error(`Invalid spindown value for ${type} slot ${slot}: ${entry.value}`);
+      }
+      spindownValue = num;
+    }
+
+    const device = (devices || []).find(d => parseInt(d.slot, 10) === slot);
+    if (!device) {
+      throw new Error(`No ${type} device found in pool for slot ${slot}`);
+    }
+
+    if (device.spindown !== spindownValue) {
+      device.spindown = spindownValue;
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Resolve device paths for changed devices and restart their spindown watchdogs.
+   * @param {Object} pool - Pool object
+   * @param {Array<string>} changedDevices - Device identifiers (type:slot) whose spindown changed
+   * @returns {Promise<void>}
+   * @private
+   */
+  async _restartSpindownForDevices(pool, changedDevices) {
+    try {
+      if (!this.mosService) {
+        this.mosService = require('./mos.service');
+      }
+
+      const restartTasks = [];
+      for (const deviceRef of changedDevices) {
+        const [type, slotStr] = deviceRef.split(':');
+        const slot = parseInt(slotStr, 10);
+        const deviceList = type === 'parity' ? pool.parity_devices : pool.data_devices;
+        const device = (deviceList || []).find(d => parseInt(d.slot, 10) === slot);
+
+        if (!device || !device.id) continue;
+
+        restartTasks.push((async () => {
+          try {
+            let devicePath;
+            if (pool.type === 'nonraid' && type === 'parity') {
+              devicePath = await this.getRealDevicePathFromId(device.id);
+            } else {
+              devicePath = await this.getRealDevicePathFromUuid(device.partuuid || device.id);
+            }
+
+            // Convert partition path to whole disk for spindown (e.g., /dev/sdk1 -> /dev/sdk)
+            const diskPath = devicePath ? disksService._getBaseDisk(devicePath) : null;
+
+            if (diskPath) {
+              console.log(`Restarting spindown watchdog for ${type} slot ${slot} (${diskPath})`);
+              await this.mosService.restartSpindownWatchdogs(diskPath);
+            }
+          } catch (pathError) {
+            console.warn(`Could not resolve/restart spindown for ${type} slot ${slot}: ${pathError.message}`);
+          }
+        })());
+      }
+
+      if (restartTasks.length > 0) {
+        await Promise.all(restartTasks);
+      }
+    } catch (error) {
+      console.warn(`Warning: Could not restart spindown watchdogs after pool config update: ${error.message}`);
     }
   }
 

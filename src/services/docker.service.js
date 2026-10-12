@@ -209,33 +209,58 @@ class DockerService {
 
     // Fetch containers and images in parallel
     const [containersRes, imagesRes] = await Promise.all([
-      axios.get('http://localhost/containers/json', dockerConfig),
+      axios.get('http://localhost/containers/json?all=true', dockerConfig),
       axios.get('http://localhost/images/json', dockerConfig)
     ]);
 
     const containers = containersRes.data || [];
     const images = imagesRes.data || [];
 
-    // Build image ID → size map
-    const imageSizeMap = new Map();
-    for (const image of images) {
-      imageSizeMap.set(image.Id, image.Size);
+    // Build image ID → container names map
+    const imageContainersMap = new Map();
+    for (const container of containers) {
+      if (!imageContainersMap.has(container.ImageID)) {
+        imageContainersMap.set(container.ImageID, []);
+      }
+      imageContainersMap.get(container.ImageID).push(
+        (container.Names?.[0] || '').replace(/^\//, '')
+      );
     }
 
     // Build result, sorted by size descending
-    const result = containers.map(container => {
-      const name = (container.Names?.[0] || '').replace(/^\//, '');
-      const size = imageSizeMap.get(container.ImageID) || 0;
+    const result = images.map(image => {
+      const repoTag = image.RepoTags?.[0] || image.Id;
+      const repoName = repoTag.split(':')[0];
+      const containerNames = imageContainersMap.get(image.Id) || [];
+      const name = containerNames.length > 0 ? containerNames[0] : repoName;
+
       return {
         name,
-        repository: container.Image || '',
-        size,
-        size_human: systemService.formatBytes(size, user)
+        repository: repoTag,
+        size: image.Size || 0,
+        size_human: systemService.formatBytes(image.Size || 0, user)
       };
     });
 
     result.sort((a, b) => b.size - a.size);
     return result;
+  }
+
+  /**
+   * Get a single container with its image size
+   * @param {string} name - Container name
+   * @param {Object} user - User object for byte format preference
+   * @returns {Promise<Object>} Container with name, repository, size, size_human
+   */
+  async getContainerImageSize(name, user = null) {
+    const result = await this.getContainerImageSizes(user);
+    const container = result.find(container => container.name === name);
+
+    if (!container) {
+      throw new Error(`Container ${name} not found`);
+    }
+
+    return container;
   }
 
   /**
