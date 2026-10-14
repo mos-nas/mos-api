@@ -85,6 +85,34 @@ const { checkRole } = require('../middleware/auth.middleware');
  *                 formatted:
  *                   type: string
  *                   example: "512.00 MiB"
+ *     MountEntry:
+ *       type: object
+ *       required:
+ *         - source
+ *         - destination
+ *       example:
+ *         source: "/mnt/pool/data"
+ *         destination: "/mnt/data"
+ *         readonly: false
+ *         type: "directory"
+ *       properties:
+ *         source:
+ *           type: string
+ *           description: Absolute host path (no spaces or "..")
+ *           example: "/mnt/pool/data"
+ *         destination:
+ *           type: string
+ *           description: Path inside the container
+ *           example: "/mnt/data"
+ *         readonly:
+ *           type: boolean
+ *           description: Mount read-only (defaults to false)
+ *           default: false
+ *         type:
+ *           type: string
+ *           enum: [directory, file]
+ *           description: Bind target type (defaults to directory)
+ *           default: directory
  *     ContainerCreateRequest:
  *       type: object
  *       required:
@@ -133,29 +161,12 @@ const { checkRole } = require('../middleware/auth.middleware');
  *           description: Optional host bind mounts to inject into the container config
  *           items:
  *             $ref: '#/components/schemas/MountEntry'
- *     MountEntry:
- *       type: object
- *       required:
- *         - source
- *         - destination
- *       properties:
- *         source:
- *           type: string
- *           description: Absolute host path (no spaces or "..")
- *           example: "/mnt/pool/data"
- *         destination:
- *           type: string
- *           description: Path inside the container
- *           example: "/mnt/data"
- *         readonly:
- *           type: boolean
- *           description: Mount read-only (defaults to false)
- *           default: false
- *         type:
- *           type: string
- *           enum: [dir, file]
- *           description: Bind target type (defaults to dir)
- *           default: dir
+ *           example:
+ *             - source: "/mnt/pool/data"
+ *               destination: "/mnt/data"
+ *             - source: "/mnt/pool/media"
+ *               destination: "/mnt/media"
+ *               readonly: true
  *     ImageInfo:
  *       type: object
  *       properties:
@@ -842,11 +853,12 @@ router.get('/images', async (req, res) => {
  *       content:
  *         application/json:
  *           schema:
- *             oneOf:
- *               - $ref: '#/components/schemas/MountEntry'
- *               - type: array
- *                 items:
- *                   $ref: '#/components/schemas/MountEntry'
+ *             type: array
+ *             items:
+ *               $ref: '#/components/schemas/MountEntry'
+ *           example:
+ *             - source: "/mnt/pool/data"
+ *               destination: "/mnt/data"
  *     responses:
  *       200:
  *         description: Resulting list of mounts
@@ -870,6 +882,12 @@ router.get('/images', async (req, res) => {
  *             type: array
  *             items:
  *               $ref: '#/components/schemas/MountEntry'
+ *           example:
+ *             - source: "/mnt/pool/data"
+ *               destination: "/mnt/data"
+ *             - source: "/mnt/pool/media"
+ *               destination: "/mnt/media"
+ *               readonly: true
  *     responses:
  *       200:
  *         description: Resulting list of mounts
@@ -890,11 +908,12 @@ router.get('/images', async (req, res) => {
  *       content:
  *         application/json:
  *           schema:
- *             oneOf:
- *               - $ref: '#/components/schemas/MountEntry'
- *               - type: array
- *                 items:
- *                   $ref: '#/components/schemas/MountEntry'
+ *             type: array
+ *             items:
+ *               $ref: '#/components/schemas/MountEntry'
+ *           example:
+ *             - source: "/mnt/pool/data"
+ *               destination: "/mnt/data"
  *     responses:
  *       200:
  *         description: Remaining list of mounts

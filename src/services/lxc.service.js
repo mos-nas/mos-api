@@ -771,7 +771,7 @@ class LxcService {
     if (!source.startsWith('/')) return false;
     if (/\s/.test(source) || /\s/.test(destination)) return false;
     if (source.includes('..') || destination.includes('..')) return false;
-    if (mount.type !== undefined && mount.type !== 'dir' && mount.type !== 'file') return false;
+    if (mount.type !== undefined && mount.type !== 'directory' && mount.type !== 'file') return false;
     if (mount.readonly !== undefined && typeof mount.readonly !== 'boolean') return false;
     return true;
   }
@@ -796,7 +796,7 @@ class LxcService {
         source,
         destination: `/${target.replace(/^\/+/, '')}`,
         readonly: /(^|,)ro(,|$)/.test(options),
-        type: /create=file/.test(options) ? 'file' : 'dir'
+        type: /create=file/.test(options) ? 'file' : 'directory'
       });
     }
     return mounts;
