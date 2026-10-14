@@ -216,29 +216,24 @@ class DockerService {
     const containers = containersRes.data || [];
     const images = imagesRes.data || [];
 
-    // Build image ID → container names map
-    const imageContainersMap = new Map();
-    for (const container of containers) {
-      if (!imageContainersMap.has(container.ImageID)) {
-        imageContainersMap.set(container.ImageID, []);
-      }
-      imageContainersMap.get(container.ImageID).push(
-        (container.Names?.[0] || '').replace(/^\//, '')
-      );
+    // Build image ID → image data map for size lookup
+    const imageSizeMap = new Map();
+    for (const image of images) {
+      imageSizeMap.set(image.Id, image);
     }
 
-    // Build result, sorted by size descending
-    const result = images.map(image => {
-      const repoTag = image.RepoTags?.[0] || image.Id;
-      const repoName = repoTag.split(':')[0];
-      const containerNames = imageContainersMap.get(image.Id) || [];
-      const name = containerNames.length > 0 ? containerNames[0] : repoName;
+    // Build result: one entry per container
+    const result = containers.map(container => {
+      const containerName = (container.Names?.[0] || '').replace(/^\//, '');
+      const image = imageSizeMap.get(container.ImageID);
+      const repoTag = image?.RepoTags?.[0] || container.Image || 'unknown';
+      const size = image?.Size || 0;
 
       return {
-        name,
+        name: containerName,
         repository: repoTag,
-        size: image.Size || 0,
-        size_human: systemService.formatBytes(image.Size || 0, user)
+        size,
+        size_human: systemService.formatBytes(size, user)
       };
     });
 
@@ -253,14 +248,35 @@ class DockerService {
    * @returns {Promise<Object>} Container with name, repository, size, size_human
    */
   async getContainerImageSize(name, user = null) {
-    const result = await this.getContainerImageSizes(user);
-    const container = result.find(container => container.name === name);
+    const dockerConfig = {
+      socketPath: '/var/run/docker.sock',
+      validateStatus: () => true,
+      timeout: 30000,
+      responseType: 'json'
+    };
 
-    if (!container) {
+    const containerRes = await axios.get(`http://localhost/containers/${encodeURIComponent(name)}/json`, dockerConfig);
+
+    if (containerRes.status !== 200 || !containerRes.data) {
       throw new Error(`Container ${name} not found`);
     }
 
-    return container;
+    const container = containerRes.data;
+    const repoTag = container.Config?.Image || container.Image || 'unknown';
+
+    const imageRes = await axios.get(`http://localhost/images/${encodeURIComponent(container.Image)}/json`, dockerConfig);
+
+    let size = 0;
+    if (imageRes.status === 200 && imageRes.data) {
+      size = imageRes.data.Size || 0;
+    }
+
+    return {
+      name: (container.Name || '').replace(/^\//, ''),
+      repository: repoTag,
+      size,
+      size_human: systemService.formatBytes(size, user)
+    };
   }
 
   /**
