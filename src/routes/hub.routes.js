@@ -320,7 +320,7 @@ router.post('/update', async (req, res) => {
  *         name: type
  *         schema:
  *           type: string
- *           enum: [docker, compose, plugin]
+ *           enum: [docker, compose, plugin, driver]
  *         description: Filter by type
  *       - in: query
  *         name: sort
@@ -372,7 +372,7 @@ router.post('/update', async (req, res) => {
  *                         type: string
  *                       type:
  *                         type: string
- *                         enum: [docker, compose, plugin]
+ *                         enum: [docker, compose, plugin, driver]
  *                       category:
  *                         type: array
  *                       description:

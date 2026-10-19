@@ -12,7 +12,7 @@ class HubService {
     this.indexPath = '/var/mos/hub/repositories.json';
     this.installedPluginsPath = '/boot/optional/plugins';
     this.installedDockerTemplatesPath = '/boot/config/system/docker/templates';
-    this.allowedTypes = ['docker', 'compose', 'lxc', 'plugin', 'vm'];
+    this.allowedTypes = ['docker', 'compose', 'lxc', 'plugin', 'driver', 'vm'];
     this.allowedCategories = ['AI', 'Backup', 'Hosting', 'Crypto', 'Downloader', 'Driver', 'Game Server', 'Home Automation', 'Media', 'Network', 'Productivity', 'Monitoring', 'Security', 'System', 'Utilities', 'Misc'];
 
     // In-memory caches of installed identifiers to avoid hitting the USB /boot
@@ -1054,13 +1054,13 @@ class HubService {
   async _annotateInstalled(templates) {
     if (!Array.isArray(templates) || templates.length === 0) return templates;
 
-    const hasPlugin = templates.some(t => t.type === 'plugin');
+    const hasPlugin = templates.some(t => t.type === 'plugin' || t.type === 'driver');
     const hasDocker = templates.some(t => t.type === 'docker');
     const pluginRepos = hasPlugin ? await this._getInstalledPluginRepos() : null;
     const dockerImages = hasDocker ? await this._getInstalledDockerImages() : null;
 
     for (const t of templates) {
-      if (t.type === 'plugin') {
+      if (t.type === 'plugin' || t.type === 'driver') {
         t.installed = pluginRepos.has(this._normalizeRepoUrl(t.repository));
       } else if (t.type === 'docker') {
         t.installed = dockerImages.has(this._normalizeImageRef(t.repository));
@@ -1207,7 +1207,7 @@ class HubService {
       maintainer_donate: maintainerInfo.donation || '',
       donate: template.donate || '',
       support: template.support || '',
-      type: 'plugin',
+      type: template.driver === true ? 'driver' : 'plugin',
       category,
       description: template.description || '',
       readme_url: template.readme_url || '',
