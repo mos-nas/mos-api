@@ -569,9 +569,6 @@ class DockerWebSocketManager extends EventEmitter {
               'compose-upgrade',
               params
             );
-
-            // Sync local SHAs to remote SHAs after successful upgrade
-            await this.dockerComposeService._syncLocalShasAfterUpgrade(stack.stack, true);
           } catch (error) {
             // Continue with next stack even if one fails
           }
@@ -649,9 +646,6 @@ class DockerWebSocketManager extends EventEmitter {
             'upgrade-group',
             params
           );
-
-          // Sync local SHAs to remote SHAs after successful upgrade
-          await this.dockerComposeService._syncLocalShasAfterUpgrade(group.name, force_update);
         } catch (error) {
           // Error already handled by executeCommandWithStream
         }
@@ -1280,7 +1274,7 @@ class DockerWebSocketManager extends EventEmitter {
       }
 
       // Update compose-containers file (even with 0 containers, so the stack entry exists)
-      await this.dockerComposeService._updateStackInComposeContainers(name, null, webui, noAutoupdate);
+      await this.dockerComposeService._updateStackInComposeContainers(name, null, webui, noAutoupdate, true);
       this.sendUpdate(null, operationId, 'running', {
         output: `Updated compose-containers file\n`,
         stream: 'stdout'
@@ -1574,7 +1568,7 @@ class DockerWebSocketManager extends EventEmitter {
       }
 
       // Update compose-containers file (even with 0 containers, so the stack entry exists)
-      await this.dockerComposeService._updateStackInComposeContainers(name, null, webui, noAutoupdate);
+      await this.dockerComposeService._updateStackInComposeContainers(name, null, webui, noAutoupdate, true);
       this.sendUpdate(null, operationId, 'running', {
         output: `Updated compose-containers file\n`,
         stream: 'stdout'
@@ -1891,9 +1885,6 @@ class DockerWebSocketManager extends EventEmitter {
         'compose-upgrade',
         params
       );
-
-      // Sync local SHAs to remote SHAs after successful upgrade
-      await this.dockerComposeService._syncLocalShasAfterUpgrade(name, force_update);
 
       this.sendUpdate(null, operationId, 'running', {
         output: `\nUpdated compose-containers file\n`,

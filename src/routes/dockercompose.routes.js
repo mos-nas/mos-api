@@ -803,6 +803,48 @@ router.post('/stacks/:name/pull', async (req, res) => {
 
 /**
  * @swagger
+ * /docker/mos/compose/stacks/{name}/sync-shas:
+ *   post:
+ *     summary: Sync local SHAs to remote SHAs for a compose stack
+ *     description: Updates the compose-containers file with current local image SHAs after a pull (admin only)
+ *     tags: [Docker Compose]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: name
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Stack name
+ *     responses:
+ *       200:
+ *         description: SHAs synced successfully
+ *       401:
+ *         description: Not authenticated
+ *       403:
+ *         description: Admin permission required
+ *       404:
+ *         description: Stack not found
+ *       500:
+ *         description: Server error
+ */
+router.post('/stacks/:name/sync-shas', async (req, res) => {
+  try {
+    const { name } = req.params;
+    const result = await dockerComposeService.syncStackShas(name);
+    res.json(result);
+  } catch (error) {
+    if (error.message.includes('not found')) {
+      res.status(404).json({ error: error.message });
+    } else {
+      res.status(500).json({ error: error.message });
+    }
+  }
+});
+
+/**
+ * @swagger
  * /docker/mos/compose/stacks/{name}/upgrade:
  *   post:
  *     summary: Upgrade a compose stack to latest images

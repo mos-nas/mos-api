@@ -517,7 +517,7 @@ class DockerComposeService {
    * @param {Object} existingServices - Previously stored services, used to keep known remote SHAs
    * @returns {Promise<Object>} Object with service details
    */
-  async _getStackContainerDetails(stackName, existingServices = {}) {
+  async _getStackContainerDetails(stackName, existingServices = {}, { syncRemote = false } = {}) {
     try {
       const containerNames = await this._getStackContainers(stackName);
       const services = {};
@@ -558,11 +558,13 @@ class DockerComposeService {
             localSha = knownRemote;
           }
 
+          // After a pull/upgrade, local is the latest - sync remote to it
+          // Otherwise preserve the known remote SHA from the last update check
           services[serviceName] = {
             container: containerName,
             repo: image,
             local: localSha,
-            remote: knownRemote || localSha
+            remote: syncRemote ? localSha : (knownRemote || localSha)
           };
         } catch (err) {
           console.warn(`Failed to get details for container ${containerName}: ${err.message}`);
@@ -602,7 +604,7 @@ class DockerComposeService {
    * @param {string|null} webui - WebUI URL (null to preserve existing)
    * @returns {Promise<void>}
    */
-  async _updateStackInComposeContainers(stackName, autostart = null, webui = null, noAutoupdate = null) {
+  async _updateStackInComposeContainers(stackName, autostart = null, webui = null, noAutoupdate = null, syncRemote = false) {
     try {
       const composeContainers = await this._readComposeContainers();
 
@@ -610,7 +612,8 @@ class DockerComposeService {
       const existingIndex = composeContainers.findIndex(s => s.stack === stackName);
       const services = await this._getStackContainerDetails(
         stackName,
-        existingIndex !== -1 ? (composeContainers[existingIndex].services || {}) : {}
+        existingIndex !== -1 ? (composeContainers[existingIndex].services || {}) : {},
+        { syncRemote }
       );
 
       // Preserve existing autostart, webui and no_autoupdate if available
@@ -675,10 +678,11 @@ class DockerComposeService {
         return;
       }
 
-      // Keep the known remote SHAs so a pull that changed nothing stays visible
+      // After upgrade, local is the latest - sync remote to it
       const services = await this._getStackContainerDetails(
         stackName,
-        composeContainers[existingIndex].services || {}
+        composeContainers[existingIndex].services || {},
+        { syncRemote: true }
       );
       composeContainers[existingIndex].services = services;
 
@@ -953,7 +957,7 @@ class DockerComposeService {
       }
 
       // Update compose-containers file (even with 0 containers, so the stack entry exists)
-      await this._updateStackInComposeContainers(name, autostart, webui, noAutoupdate);
+      await this._updateStackInComposeContainers(name, autostart, webui, noAutoupdate, true);
 
       // Return result (even if deployment failed, files and group were created)
       const result = {
@@ -1320,7 +1324,7 @@ class DockerComposeService {
       // Update compose-containers file (even with 0 containers, so the stack entry exists)
       // webui: undefined = preserve, null = clear, string = set
       const webuiValue = webui === undefined ? null : webui;
-      await this._updateStackInComposeContainers(name, autostart, webuiValue, noAutoupdate);
+      await this._updateStackInComposeContainers(name, autostart, webuiValue, noAutoupdate, true);
 
       // Get current values for response
       const composeContainers = await this._readComposeContainers();
@@ -1697,6 +1701,22 @@ class DockerComposeService {
   }
 
   /**
+   * Sync local SHAs to remote SHAs for a stack after images have been pulled
+   * Call this after docker-compose pull to update the compose-containers file
+   * @param {string} name - Stack name
+   * @returns {Promise<Object>} Result
+   */
+  async syncStackShas(name) {
+    try {
+      this._validateStackName(name);
+      await this._syncLocalShasAfterUpgrade(name, true);
+      return { success: true, stack: name };
+    } catch (error) {
+      throw new Error(`Failed to sync SHAs for stack ${name}: ${error.message}`);
+    }
+  }
+
+  /**
    * Upgrade a compose stack to latest images
    * @param {string} name - Stack name
    * @param {boolean} forceUpdate - Force update even if no new version available
@@ -1720,11 +1740,8 @@ class DockerComposeService {
       const forceArg = forceUpdate ? 'force_update' : '""';
       const command = `${scriptPath} ${name} ${forceArg} compose`;
 
-      // Execute upgrade script
+      // Execute upgrade script (script calls API to sync SHAs after upgrade)
       const { stdout, stderr } = await execPromise(command);
-
-      // Sync local SHAs to remote SHAs after successful upgrade
-      await this._syncLocalShasAfterUpgrade(name, forceUpdate);
 
       // Try to parse the output as JSON
       try {
