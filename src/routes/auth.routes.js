@@ -61,6 +61,12 @@ const { loginRateLimiter, resetLoginAttempts } = require('../middleware/login-ra
  *           type: boolean
  *           description: Whether user has SMB/CIFS access
  *           example: false
+ *         theme:
+ *           type: string
+ *           nullable: true
+ *           description: Theme preference
+ *           default: null
+ *           example: "vertical"
  *     CreateUserRequest:
  *       type: object
  *       required:

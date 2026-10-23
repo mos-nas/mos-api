@@ -39,6 +39,12 @@ const userService = require('../services/user.service');
  *           type: boolean
  *           description: Dark mode preference
  *           example: false
+ *         theme:
+ *           type: string
+ *           nullable: true
+ *           description: Theme preference
+ *           default: null
+ *           example: "vertical"
  *         byte_format:
  *           type: string
  *           enum: [binary, decimal]
@@ -343,6 +349,12 @@ router.get('/me', authenticateToken, async (req, res) => {
  *                 type: boolean
  *                 description: Dark mode preference
  *                 example: true
+ *               theme:
+ *                 type: string
+ *                 nullable: true
+ *                 description: Theme preference
+ *                 default: null
+ *                 example: "vertical"
  *               byte_format:
  *                 type: string
  *                 enum: [binary, decimal]
@@ -524,6 +536,11 @@ router.get('/:id', checkRole(['admin']), async (req, res) => {
  *               darkmode:
  *                 type: boolean
  *                 description: Dark mode preference
+ *               theme:
+ *                 type: string
+ *                 nullable: true
+ *                 description: Theme preference
+ *                 default: null
  *               byte_format:
  *                 type: string
  *                 enum: [binary, decimal]
