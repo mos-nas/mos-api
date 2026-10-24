@@ -39,10 +39,10 @@ const userService = require('../services/user.service');
  *           type: boolean
  *           description: Dark mode preference
  *           example: false
- *         theme:
+ *         menu_layout:
  *           type: string
  *           nullable: true
- *           description: Theme preference
+ *           description: Menu layout preference
  *           default: null
  *           example: "vertical"
  *         byte_format:
@@ -349,10 +349,10 @@ router.get('/me', authenticateToken, async (req, res) => {
  *                 type: boolean
  *                 description: Dark mode preference
  *                 example: true
- *               theme:
+ *               menu_layout:
  *                 type: string
  *                 nullable: true
- *                 description: Theme preference
+ *                 description: Menu layout preference
  *                 default: null
  *                 example: "vertical"
  *               byte_format:
@@ -536,10 +536,10 @@ router.get('/:id', checkRole(['admin']), async (req, res) => {
  *               darkmode:
  *                 type: boolean
  *                 description: Dark mode preference
- *               theme:
+ *               menu_layout:
  *                 type: string
  *                 nullable: true
- *                 description: Theme preference
+ *                 description: Menu layout preference
  *                 default: null
  *               byte_format:
  *                 type: string

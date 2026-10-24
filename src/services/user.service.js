@@ -135,8 +135,8 @@ class UserService {
     if (index === -1) return null;
 
     let dirty = false;
-    if (users[index].theme === undefined) {
-      users[index].theme = null;
+    if (users[index].menu_layout === undefined) {
+      users[index].menu_layout = null;
       dirty = true;
     }
     if (users[index].hide_inactive_menus === undefined) {
@@ -159,8 +159,8 @@ class UserService {
     const sanitizedUser = { ...user };
     sanitizedUser.password = 'SECRET';
     sanitizedUser.mfa_enabled = !!user.mfa_enabled;
-    if (sanitizedUser.theme === undefined) {
-      sanitizedUser.theme = null;
+    if (sanitizedUser.menu_layout === undefined) {
+      sanitizedUser.menu_layout = null;
     }
     delete sanitizedUser.mfa_secret;
     delete sanitizedUser.mfa_recovery_code;
@@ -287,7 +287,7 @@ class UserService {
       language,
       primary_color,
       darkmode,
-      theme: null,
+      menu_layout: null,
       samba_user: samba_user || role === 'samba_only',
       byte_format: 'binary', // Default byte format setting
       show_menu: true, // Default menu visibility setting
@@ -416,7 +416,7 @@ class UserService {
           throw new Error('You are not allowed to change your role to admin. Only administrators can modify user roles.');
         }
 
-        const allowedFields = ['language', 'primary_color', 'darkmode', 'theme', 'password', 'show_menu', 'hide_inactive_menus', 'group_menus'];
+        const allowedFields = ['language', 'primary_color', 'darkmode', 'menu_layout', 'password', 'show_menu', 'hide_inactive_menus', 'group_menus'];
         const filteredUpdates = {};
 
         for (const [key, value] of Object.entries(updates)) {
