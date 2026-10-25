@@ -5334,13 +5334,43 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
         // Settings read failed - skip update check
       }
 
+      // Check for reboot pending
+      let rebootPending = { pending: false, reason: [] };
+      try {
+        const rebootFile = '/var/mos/reboot_pending';
+        const content = await fs.readFile(rebootFile, 'utf8');
+        const lines = content.trim().split('\n').filter(l => l.trim());
+        // Filter: for "MOS Update ..." and "MOS Kernel Update ..." lines, keep only the last one of each
+        const filtered = [];
+        let lastMosUpdate = null;
+        let lastMosKernelUpdate = null;
+        for (const line of lines) {
+          if (/^mos kernel update/i.test(line)) {
+            lastMosKernelUpdate = line;
+          } else if (/^mos update/i.test(line)) {
+            lastMosUpdate = line;
+          } else {
+            filtered.push(line);
+          }
+        }
+        if (lastMosUpdate) {
+          filtered.push(lastMosUpdate);
+        }
+        if (lastMosKernelUpdate) {
+          filtered.push(lastMosKernelUpdate);
+        }
+        rebootPending = { pending: true, reason: filtered };
+      } catch (e) {
+        // File doesn't exist - no reboot pending
+      }
+
       const result = {
         docker: { enabled: dockerEnabled, running: dockerRunning },
         lxc: { enabled: lxcEnabled },
         vm: { enabled: vmEnabled, running: vmRunning },
         hub: { enabled: hubEnabled },
         llm: llmStatus,
-        mos: { supporter: this.isSupporter(), os_update_available: osUpdateAvailable },
+        mos: { supporter: this.isSupporter(), os_update_available: osUpdateAvailable, reboot_pending: rebootPending },
         ...networkServices
       };
 

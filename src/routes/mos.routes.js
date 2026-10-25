@@ -3642,6 +3642,23 @@ router.get('/certificates', async (req, res) => {
  *                       nullable: true
  *                       description: Version string from /var/mos/mos_update_check if webui_notification is enabled and an update is available, null otherwise
  *                       example: "0.6.1-stable"
+ *                     reboot_pending:
+ *                       type: object
+ *                       description: Information about a pending system reboot
+ *                       properties:
+ *                         pending:
+ *                           type: boolean
+ *                           description: Whether a system reboot is pending (file /var/mos/reboot_pending exists)
+ *                           example: true
+ *                         reason:
+ *                           type: array
+ *                           description: Reasons for the pending reboot (one entry per line from the file). For multiple "MOS Update" or "MOS Kernel Update" entries, only the last one of each is kept.
+ *                           items:
+ *                             type: string
+ *                           example:
+ *                             - "MOS Update 0.6.3-stable"
+ *                             - "MOS Kernel Update 6.1.0-amd64"
+ *                             - "Plugin Installation xyz"
  *               additionalProperties:
  *                 type: object
  *                 properties:
@@ -3684,6 +3701,9 @@ router.get('/certificates', async (req, res) => {
   *               mos:
  *                 supporter: false
  *                 os_update_available: null
+ *                 reboot_pending:
+ *                   pending: false
+ *                   reason: []
  *       401:
  *         description: Not authenticated
  *         content:
