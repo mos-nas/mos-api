@@ -2626,6 +2626,10 @@ router.get('/settings/system', async (req, res) => {
  *                     type: string
  *                     description: Cron schedule for update checks
  *                     example: "0 1 * * *"
+ *                   webui_notification:
+ *                     type: boolean
+ *                     description: Enable OS update notification in WebUI via /mos/services endpoint
+ *                     example: false
  *               logsize:
  *                 type: integer
  *                 description: Size of the /var/log tmpfs in MB (default 200). Changing this remounts /var/log with the new size.
@@ -3633,6 +3637,11 @@ router.get('/certificates', async (req, res) => {
  *                       type: boolean
  *                       description: Whether a valid supporter key is configured
  *                       example: false
+ *                     os_update_available:
+ *                       type: string
+ *                       nullable: true
+ *                       description: Version string from /var/mos/mos_update_check if webui_notification is enabled and an update is available, null otherwise
+ *                       example: "0.6.1-stable"
  *               additionalProperties:
  *                 type: object
  *                 properties:
@@ -3674,6 +3683,7 @@ router.get('/certificates', async (req, res) => {
   *                 enabled: true
   *               mos:
  *                 supporter: false
+ *                 os_update_available: null
  *       401:
  *         description: Not authenticated
  *         content:

@@ -4279,7 +4279,8 @@ class MosService {
       },
       update_check: {
         enabled: false,
-        update_check_schedule: '15 9 * * *'
+        update_check_schedule: '15 9 * * *',
+        webui_notification: false
       },
       logsize: 200,
       supporter_key: ''
@@ -4609,6 +4610,8 @@ class MosService {
               current.update_check.enabled = updates.update_check.enabled;
             if (updates.update_check.update_check_schedule !== undefined)
               current.update_check.update_check_schedule = updates.update_check.update_check_schedule;
+            if (updates.update_check.webui_notification !== undefined)
+              current.update_check.webui_notification = updates.update_check.webui_notification;
           }
         } else if (key === 'supporter_key') {
           const value = typeof updates[key] === 'string' ? updates[key].trim() : '';
@@ -5312,13 +5315,32 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
         this._getLlmStatus()
       ]);
 
+      // Check for OS update notification if webui_notification is enabled
+      let osUpdateAvailable = null;
+      try {
+        const sysSettings = await this.getSystemSettings();
+        if (sysSettings.update_check && sysSettings.update_check.webui_notification === true) {
+          const updateCheckFile = '/var/mos/mos_update_check';
+          try {
+            const version = await fs.readFile(updateCheckFile, 'utf8');
+            if (version && version.trim()) {
+              osUpdateAvailable = version.trim();
+            }
+          } catch (e) {
+            // File doesn't exist or can't be read - no update available
+          }
+        }
+      } catch (e) {
+        // Settings read failed - skip update check
+      }
+
       const result = {
         docker: { enabled: dockerEnabled, running: dockerRunning },
         lxc: { enabled: lxcEnabled },
         vm: { enabled: vmEnabled, running: vmRunning },
         hub: { enabled: hubEnabled },
         llm: llmStatus,
-        mos: { supporter: this.isSupporter() },
+        mos: { supporter: this.isSupporter(), os_update_available: osUpdateAvailable },
         ...networkServices
       };
 
