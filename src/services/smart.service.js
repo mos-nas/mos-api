@@ -1381,7 +1381,19 @@ class SmartService {
           const w = diskConf.temperatureWarning;
           const c = diskConf.temperatureCritical;
           const dType = { nvme: 'nvme', sata: 'sat', sas: 'scsi', usb: 'sat' }[deviceInfo.tran] || 'auto';
-          lines.push(`${devicePath} -d ${dType} -n standby,q -W 5,${w},${c} ${attrFlags}`);
+
+          // Validate device supports the proposed -d flag before including it
+          let validDType = null;
+          if (await this._validateSmartdLine(devicePath, dType)) {
+            validDType = dType;
+          } else if (deviceInfo.tran === 'usb' && await this._validateSmartdLine(devicePath, 'auto')) {
+            validDType = 'auto';
+          }
+          if (!validDType) {
+            lines.push(`# ${diskConf.model} (${serial}) - SMART not supported, skipped`);
+            continue;
+          }
+          lines.push(`${devicePath} -d ${validDType} -n standby,q -W 5,${w},${c} ${attrFlags}`);
         }
       }
 
@@ -1403,6 +1415,31 @@ class SmartService {
       await this._reloadSmartd();
     } catch (error) {
       console.warn(`[SmartService] Failed to generate smartd.conf: ${error.message}`);
+    }
+  }
+
+  /**
+   * Validate that a device supports SMART with the given -d flag
+   * @param {string} devicePath - Full device path
+   * @param {string} dType - Device type flag (sat, scsi, nvme, auto, etc.)
+   * @returns {Promise<boolean>} True if device supports SMART with this flag
+   * @private
+   */
+  async _validateSmartdLine(devicePath, dType) {
+    try {
+      const { stdout, stderr } = await execPromise(
+        `smartctl -n never -H -d ${dType} ${devicePath} 2>&1 || true`
+      );
+      const errorText = `${stdout} ${stderr}`.toLowerCase();
+      if (errorText.includes('unknown usb bridge') ||
+          errorText.includes('unsupported scsi opcode') ||
+          errorText.includes('read device identity failed') ||
+          errorText.includes('unable to open device')) {
+        return false;
+      }
+      return true;
+    } catch {
+      return false;
     }
   }
 
