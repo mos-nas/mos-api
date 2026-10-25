@@ -29,7 +29,7 @@ class WebPushService {
     }
 
     webpush.setVapidDetails(
-      'mailto:noreply@localhost',
+      'mailto:admin@mos-official.net',
       this.vapidKeys.publicKey,
       this.vapidKeys.privateKey
     );
@@ -130,20 +130,32 @@ class WebPushService {
     const expiredEndpoints = [];
 
     for (const sub of this.subscriptions) {
+      const host = new URL(sub.endpoint).host;
       try {
-        await webpush.sendNotification(
+        const res = await webpush.sendNotification(
           { endpoint: sub.endpoint, keys: sub.keys },
           payload
         );
         sent++;
+        console.info(`Web Push sent to ${host}: ${res.statusCode}`);
       } catch (error) {
         failed++;
-        // 410 Gone or 404 = subscription expired/invalid, remove it
+        console.error(`Web Push failed for ${host}: ${error.statusCode || ''} ${error.body || error.message}`);
         if (error.statusCode === 410 || error.statusCode === 404) {
           expiredEndpoints.push(sub.endpoint);
         }
       }
     }
+
+    if (expiredEndpoints.length > 0) {
+      this.subscriptions = this.subscriptions.filter(
+        sub => !expiredEndpoints.includes(sub.endpoint)
+      );
+      this._dirty = true;
+    }
+
+    return { sent, failed };
+  }
 
     // Clean up expired subscriptions in RAM only (no disk write to protect flash storage)
     if (expiredEndpoints.length > 0) {
