@@ -1639,6 +1639,16 @@ async function executeFunction(pluginName, functionName, displayName = null, res
       timeout: 600000 // 10min timeout
     });
 
+    // Write to reboot_pending file if restart requested
+    if (restart) {
+      try {
+        await fs.mkdir('/var/mos', { recursive: true });
+        await fs.appendFile('/var/mos/reboot_pending', `${pluginName} Update\n`);
+      } catch (e) {
+        console.error(`[executefunction] Failed to write reboot_pending for ${pluginName}:`, e.message);
+      }
+    }
+
     if (notifyName) {
       const successMsg = restart
         ? `${notifyName} completed successfully, please reboot your server`
