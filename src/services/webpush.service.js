@@ -28,11 +28,7 @@ class WebPushService {
       console.info('New VAPID keys generated and saved to:', VAPID_PATH);
     }
 
-    webpush.setVapidDetails(
-      'mailto:admin@mos-official.net',
-      this.vapidKeys.publicKey,
-      this.vapidKeys.privateKey
-    );
+    webpush.setVapidDetails('mailto:admin@mos-official.net', this.vapidKeys.publicKey, this.vapidKeys.privateKey);
 
     await this._loadSubscriptions();
     this.initialized = true;
@@ -63,23 +59,21 @@ class WebPushService {
     }
 
     // Remove existing subscription with same endpoint (re-subscribe)
-    this.subscriptions = this.subscriptions.filter(
-      sub => sub.endpoint !== subscription.endpoint
-    );
+    this.subscriptions = this.subscriptions.filter((sub) => sub.endpoint !== subscription.endpoint);
 
     this.subscriptions.push({
       userId,
       username,
       endpoint: subscription.endpoint,
       keys: subscription.keys,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
     });
 
     await this._persistSubscriptions();
 
     return {
       success: true,
-      message: 'Push subscription registered'
+      message: 'Push subscription registered',
     };
   }
 
@@ -94,14 +88,12 @@ class WebPushService {
     }
 
     const initialLength = this.subscriptions.length;
-    this.subscriptions = this.subscriptions.filter(
-      sub => sub.endpoint !== endpoint
-    );
+    this.subscriptions = this.subscriptions.filter((sub) => sub.endpoint !== endpoint);
 
     if (this.subscriptions.length === initialLength) {
       return {
         success: false,
-        message: 'Subscription not found'
+        message: 'Subscription not found',
       };
     }
 
@@ -109,7 +101,7 @@ class WebPushService {
 
     return {
       success: true,
-      message: 'Push subscription removed'
+      message: 'Push subscription removed',
     };
   }
 
@@ -132,10 +124,7 @@ class WebPushService {
     for (const sub of this.subscriptions) {
       const host = new URL(sub.endpoint).host;
       try {
-        const res = await webpush.sendNotification(
-          { endpoint: sub.endpoint, keys: sub.keys },
-          payload
-        );
+        const res = await webpush.sendNotification({ endpoint: sub.endpoint, keys: sub.keys }, payload);
         sent++;
         console.info(`Web Push sent to ${host}: ${res.statusCode}`);
       } catch (error) {
@@ -148,20 +137,7 @@ class WebPushService {
     }
 
     if (expiredEndpoints.length > 0) {
-      this.subscriptions = this.subscriptions.filter(
-        sub => !expiredEndpoints.includes(sub.endpoint)
-      );
-      this._dirty = true;
-    }
-
-    return { sent, failed };
-  }
-
-    // Clean up expired subscriptions in RAM only (no disk write to protect flash storage)
-    if (expiredEndpoints.length > 0) {
-      this.subscriptions = this.subscriptions.filter(
-        sub => !expiredEndpoints.includes(sub.endpoint)
-      );
+      this.subscriptions = this.subscriptions.filter((sub) => !expiredEndpoints.includes(sub.endpoint));
       this._dirty = true;
     }
 
@@ -206,11 +182,7 @@ class WebPushService {
   async _persistSubscriptions() {
     this._dirty = false;
     await fs.mkdir(path.dirname(SUBSCRIPTIONS_PATH), { recursive: true });
-    await fs.writeFile(
-      SUBSCRIPTIONS_PATH,
-      JSON.stringify(this.subscriptions, null, 2),
-      { mode: 0o600 }
-    );
+    await fs.writeFile(SUBSCRIPTIONS_PATH, JSON.stringify(this.subscriptions, null, 2), { mode: 0o600 });
   }
 }
 
