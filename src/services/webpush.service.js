@@ -28,11 +28,7 @@ class WebPushService {
       console.info('New VAPID keys generated and saved to:', VAPID_PATH);
     }
 
-    webpush.setVapidDetails(
-      'mailto:noreply@localhost',
-      this.vapidKeys.publicKey,
-      this.vapidKeys.privateKey
-    );
+    webpush.setVapidDetails('mailto:admin@mos-official.net', this.vapidKeys.publicKey, this.vapidKeys.privateKey);
 
     await this._loadSubscriptions();
     this.initialized = true;
@@ -63,23 +59,21 @@ class WebPushService {
     }
 
     // Remove existing subscription with same endpoint (re-subscribe)
-    this.subscriptions = this.subscriptions.filter(
-      sub => sub.endpoint !== subscription.endpoint
-    );
+    this.subscriptions = this.subscriptions.filter((sub) => sub.endpoint !== subscription.endpoint);
 
     this.subscriptions.push({
       userId,
       username,
       endpoint: subscription.endpoint,
       keys: subscription.keys,
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
     });
 
     await this._persistSubscriptions();
 
     return {
       success: true,
-      message: 'Push subscription registered'
+      message: 'Push subscription registered',
     };
   }
 
@@ -94,14 +88,12 @@ class WebPushService {
     }
 
     const initialLength = this.subscriptions.length;
-    this.subscriptions = this.subscriptions.filter(
-      sub => sub.endpoint !== endpoint
-    );
+    this.subscriptions = this.subscriptions.filter((sub) => sub.endpoint !== endpoint);
 
     if (this.subscriptions.length === initialLength) {
       return {
         success: false,
-        message: 'Subscription not found'
+        message: 'Subscription not found',
       };
     }
 
@@ -109,7 +101,7 @@ class WebPushService {
 
     return {
       success: true,
-      message: 'Push subscription removed'
+      message: 'Push subscription removed',
     };
   }
 
@@ -138,14 +130,14 @@ class WebPushService {
         sent++;
       } catch (error) {
         failed++;
-        // 410 Gone or 404 = subscription expired/invalid, remove it
+        const host = new URL(sub.endpoint).host;
+        console.error(`Web Push failed for ${host}: ${error.statusCode || ''} ${error.body || error.message}`);
         if (error.statusCode === 410 || error.statusCode === 404) {
           expiredEndpoints.push(sub.endpoint);
         }
       }
     }
 
-    // Clean up expired subscriptions in RAM only (no disk write to protect flash storage)
     if (expiredEndpoints.length > 0) {
       this.subscriptions = this.subscriptions.filter(
         sub => !expiredEndpoints.includes(sub.endpoint)
@@ -194,11 +186,7 @@ class WebPushService {
   async _persistSubscriptions() {
     this._dirty = false;
     await fs.mkdir(path.dirname(SUBSCRIPTIONS_PATH), { recursive: true });
-    await fs.writeFile(
-      SUBSCRIPTIONS_PATH,
-      JSON.stringify(this.subscriptions, null, 2),
-      { mode: 0o600 }
-    );
+    await fs.writeFile(SUBSCRIPTIONS_PATH, JSON.stringify(this.subscriptions, null, 2), { mode: 0o600 });
   }
 }
 
