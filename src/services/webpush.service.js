@@ -122,13 +122,15 @@ class WebPushService {
     const expiredEndpoints = [];
 
     for (const sub of this.subscriptions) {
-      const host = new URL(sub.endpoint).host;
       try {
-        const res = await webpush.sendNotification({ endpoint: sub.endpoint, keys: sub.keys }, payload);
+        await webpush.sendNotification(
+          { endpoint: sub.endpoint, keys: sub.keys },
+          payload
+        );
         sent++;
-        console.info(`Web Push sent to ${host}: ${res.statusCode}`);
       } catch (error) {
         failed++;
+        const host = new URL(sub.endpoint).host;
         console.error(`Web Push failed for ${host}: ${error.statusCode || ''} ${error.body || error.message}`);
         if (error.statusCode === 410 || error.statusCode === 404) {
           expiredEndpoints.push(sub.endpoint);
@@ -137,7 +139,9 @@ class WebPushService {
     }
 
     if (expiredEndpoints.length > 0) {
-      this.subscriptions = this.subscriptions.filter((sub) => !expiredEndpoints.includes(sub.endpoint));
+      this.subscriptions = this.subscriptions.filter(
+        sub => !expiredEndpoints.includes(sub.endpoint)
+      );
       this._dirty = true;
     }
 
