@@ -1027,6 +1027,74 @@ class DockerService {
   }
 
   /**
+   * Permanently removes a removed template from the removed directory
+   * @param {string} name - The name of the removed template to delete
+   * @returns {Promise<void>}
+   */
+  async removeRemovedTemplate(name) {
+    try {
+      if (!name) {
+        throw new Error('Template name is required');
+      }
+
+      const removedDir = '/boot/config/system/docker/removed';
+      const fileName = `${name}.json`;
+      const filePath = path.join(removedDir, fileName);
+
+      // Check if file exists
+      try {
+        await fs.access(filePath);
+      } catch (err) {
+        if (err.code === 'ENOENT') {
+          throw new Error(`Removed template '${name}' not found`);
+        }
+        throw err;
+      }
+
+      // Delete the file
+      await fs.unlink(filePath);
+    } catch (error) {
+      throw new Error(`Failed to remove template: ${error.message}`);
+    }
+  }
+
+  /**
+   * Permanently removes all removed templates from the removed directory
+   * @returns {Promise<number>} Number of templates deleted
+   */
+  async removeAllRemovedTemplates() {
+    try {
+      const removedDir = '/boot/config/system/docker/removed';
+
+      // Check if removed directory exists
+      try {
+        await fs.access(removedDir);
+      } catch (err) {
+        if (err.code === 'ENOENT') {
+          return 0; // Directory doesn't exist, nothing to delete
+        }
+        throw err;
+      }
+
+      // Read directory contents
+      const files = await fs.readdir(removedDir);
+
+      // Filter for .json files
+      const jsonFiles = files.filter(file => file.endsWith('.json'));
+
+      // Delete each file
+      for (const file of jsonFiles) {
+        const filePath = path.join(removedDir, file);
+        await fs.unlink(filePath);
+      }
+
+      return jsonFiles.length;
+    } catch (error) {
+      throw new Error(`Failed to remove all templates: ${error.message}`);
+    }
+  }
+
+  /**
    * Gets a list of installed container templates
    * @returns {Promise<Array>} Array of installed template names
    */

@@ -1903,6 +1903,70 @@ class DockerComposeService {
     }
   }
 
+  /**
+   * Permanently removes a removed stack from the removed directory
+   * @param {string} name - Stack name
+   * @returns {Promise<void>}
+   */
+  async removeRemovedStack(name) {
+    try {
+      this._validateStackName(name);
+
+      const removedPath = path.join(this._getRemovedBasePath(), name);
+
+      // Check if removed stack exists
+      try {
+        await fs.access(removedPath);
+      } catch (err) {
+        if (err.code === 'ENOENT') {
+          throw new Error(`Removed stack '${name}' not found`);
+        }
+        throw err;
+      }
+
+      // Delete the removed stack directory
+      await fs.rm(removedPath, { recursive: true, force: true });
+    } catch (error) {
+      throw new Error(`Failed to remove stack: ${error.message}`);
+    }
+  }
+
+  /**
+   * Permanently removes all removed stacks from the removed directory
+   * @returns {Promise<number>} Number of stacks deleted
+   */
+  async removeAllRemovedStacks() {
+    try {
+      const removedBasePath = this._getRemovedBasePath();
+
+      // Check if removed directory exists
+      try {
+        await fs.access(removedBasePath);
+      } catch (err) {
+        if (err.code === 'ENOENT') {
+          return 0; // Directory doesn't exist, nothing to delete
+        }
+        throw err;
+      }
+
+      // Read directory contents
+      const entries = await fs.readdir(removedBasePath, { withFileTypes: true });
+
+      // Filter for directories (stacks)
+      const stackDirs = entries.filter(entry => entry.isDirectory());
+
+      // Delete each stack directory
+      for (const entry of stackDirs) {
+        const stackPath = path.join(removedBasePath, entry.name);
+        await fs.rm(stackPath, { recursive: true, force: true });
+      }
+
+      return stackDirs.length;
+    } catch (error) {
+      throw new Error(`Failed to remove all stacks: ${error.message}`);
+    }
+  }
+
 }
 
 module.exports = new DockerComposeService();

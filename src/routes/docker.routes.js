@@ -1119,6 +1119,110 @@ router.get('/mos/templates/:name', async (req, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /docker/mos/templates/removed:
+ *   delete:
+ *     summary: Permanently delete all removed container templates
+ *     description: Delete all templates from the removed directory at once (admin only). Only works on removed templates, not installed ones.
+ *     tags: [Docker]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: All removed templates deleted successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "All removed templates permanently deleted"
+ *                 deleted_count:
+ *                   type: integer
+ *                   description: Number of templates deleted
+ *                   example: 3
+ *       401:
+ *         description: Not authenticated
+ *       403:
+ *         description: Admin permission required
+ *       500:
+ *         description: Server error
+ */
+router.delete('/mos/templates/removed', async (req, res) => {
+  try {
+    const deletedCount = await dockerService.removeAllRemovedTemplates();
+    res.json({ success: true, message: 'All removed templates permanently deleted', deleted_count: deletedCount });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @swagger
+ * /docker/mos/templates/{name}:
+ *   delete:
+ *     summary: Permanently delete a removed container template
+ *     description: Delete a template from the removed directory (admin only). Only works on removed templates, not installed ones.
+ *     tags: [Docker]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: name
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Name of the removed template to delete
+ *         example: "nginx"
+ *     responses:
+ *       200:
+ *         description: Template deleted successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Removed template 'nginx' permanently deleted"
+ *       400:
+ *         description: Template name is required
+ *       401:
+ *         description: Not authenticated
+ *       403:
+ *         description: Admin permission required
+ *       404:
+ *         description: Removed template not found
+ *       500:
+ *         description: Server error
+ */
+router.delete('/mos/templates/:name', async (req, res) => {
+  try {
+    const templateName = req.params.name;
+
+    if (!templateName) {
+      return res.status(400).json({ error: 'Template name is required' });
+    }
+
+    await dockerService.removeRemovedTemplate(templateName);
+    res.json({ success: true, message: `Removed template '${templateName}' permanently deleted` });
+  } catch (error) {
+    if (error.message.includes('not found')) {
+      res.status(404).json({ error: error.message });
+    } else {
+      res.status(500).json({ error: error.message });
+    }
+  }
+});
+
 
 
 

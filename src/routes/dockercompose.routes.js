@@ -1043,4 +1043,108 @@ router.get('/templates/:name', async (req, res) => {
   }
 });
 
+/**
+ * @swagger
+ * /docker/mos/compose/templates/removed:
+ *   delete:
+ *     summary: Permanently delete all removed compose stack templates
+ *     description: Delete all stack templates from the removed directory at once (admin only). Only works on removed stacks, not installed ones.
+ *     tags: [Docker Compose]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: All removed stack templates deleted successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "All removed stack templates permanently deleted"
+ *                 deleted_count:
+ *                   type: integer
+ *                   description: Number of stack templates deleted
+ *                   example: 2
+ *       401:
+ *         description: Not authenticated
+ *       403:
+ *         description: Admin permission required
+ *       500:
+ *         description: Server error
+ */
+router.delete('/templates/removed', async (req, res) => {
+  try {
+    const deletedCount = await dockerComposeService.removeAllRemovedStacks();
+    res.json({ success: true, message: 'All removed stack templates permanently deleted', deleted_count: deletedCount });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @swagger
+ * /docker/mos/compose/templates/{name}:
+ *   delete:
+ *     summary: Permanently delete a removed compose stack template
+ *     description: Delete a stack template from the removed directory (admin only). Only works on removed stacks, not installed ones.
+ *     tags: [Docker Compose]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: name
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Name of the removed stack template to delete
+ *         example: "wordpress"
+ *     responses:
+ *       200:
+ *         description: Template deleted successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Removed stack 'wordpress' permanently deleted"
+ *       400:
+ *         description: Template name is required
+ *       401:
+ *         description: Not authenticated
+ *       403:
+ *         description: Admin permission required
+ *       404:
+ *         description: Removed template not found
+ *       500:
+ *         description: Server error
+ */
+router.delete('/templates/:name', async (req, res) => {
+  try {
+    const { name } = req.params;
+
+    if (!name) {
+      return res.status(400).json({ error: 'Template name is required' });
+    }
+
+    await dockerComposeService.removeRemovedStack(name);
+    res.json({ success: true, message: `Removed stack '${name}' permanently deleted` });
+  } catch (error) {
+    if (error.message.includes('not found')) {
+      res.status(404).json({ error: error.message });
+    } else {
+      res.status(500).json({ error: error.message });
+    }
+  }
+});
+
 module.exports = router;
