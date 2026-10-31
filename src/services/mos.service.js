@@ -7911,7 +7911,8 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
       headers: { 'Content-Type': 'application/json' },
       body: {},
       alert_mapping: {},
-      color_prio: {}
+      color_prio: {},
+      levels: ['normal', 'warning', 'alert']
     };
   }
 
