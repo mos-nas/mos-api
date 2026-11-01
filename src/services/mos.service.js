@@ -8159,7 +8159,8 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
       to: [],
       subject: '{{.Title}}',
       body: '{{.Message}}',
-      alert_mapping: {}
+      alert_mapping: {},
+      levels: ['normal', 'warning', 'alert']
     };
   }
 
