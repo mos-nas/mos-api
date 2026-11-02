@@ -1393,7 +1393,7 @@ async function updatePlugins(pluginName = null) {
         await fs.rm(tempDir, { recursive: true, force: true });
         await fs.rm(cacheDir, { recursive: true, force: true }).catch(() => {});
 
-        await _sendNotification('Plugin', `${notifyName} updated to Version: ${newTag}`, 'info');
+        await _sendNotification('Plugin', `${notifyName} updated to Version: ${newTag}`, 'normal');
         results.push({ plugin: plugin.plugin, from: oldTag, to: newTag, success: true });
 
       } catch (err) {
