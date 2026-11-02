@@ -7966,6 +7966,16 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
         throw new Error('color_prio must be a plain object or false.');
       }
     }
+    if (data.levels !== undefined) {
+      if (!Array.isArray(data.levels)) {
+        throw new Error('levels must be an array of priority strings.');
+      }
+      for (const level of data.levels) {
+        if (typeof level !== 'string') {
+          throw new Error('All levels must be strings.');
+        }
+      }
+    }
   }
 
   /**
@@ -8091,7 +8101,7 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
 
     const before = JSON.stringify(current);
 
-    const allowed = ['enabled', 'user', 'token', 'url', 'method', 'headers', 'body', 'alert_mapping', 'color_prio'];
+    const allowed = ['enabled', 'user', 'token', 'url', 'method', 'headers', 'body', 'alert_mapping', 'color_prio', 'levels'];
     for (const key of Object.keys(updates)) {
       if (allowed.includes(key)) {
         if (key === 'method' && typeof updates[key] === 'string') {
@@ -8201,6 +8211,16 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
         throw new Error('alert_mapping must be a plain object.');
       }
     }
+    if (data.levels !== undefined) {
+      if (!Array.isArray(data.levels)) {
+        throw new Error('levels must be an array of priority strings.');
+      }
+      for (const level of data.levels) {
+        if (typeof level !== 'string') {
+          throw new Error('All levels must be strings.');
+        }
+      }
+    }
 
     if (checkRequired && data.enabled === true) {
       if (!data.smtp_host || typeof data.smtp_host !== 'string' || data.smtp_host.trim() === '') {
@@ -8260,7 +8280,7 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
       if (error.code !== 'ENOENT') throw error;
     }
 
-    const allowed = ['enabled', 'smtp_host', 'smtp_port', 'smtp_tls', 'smtp_user', 'smtp_password', 'from', 'to', 'subject', 'body', 'alert_mapping'];
+    const allowed = ['enabled', 'smtp_host', 'smtp_port', 'smtp_tls', 'smtp_user', 'smtp_password', 'from', 'to', 'subject', 'body', 'alert_mapping', 'levels'];
     for (const key of Object.keys(config)) {
       if (allowed.includes(key)) {
         current[key] = config[key];
