@@ -340,7 +340,7 @@ class SwapService {
     await execPromise(`swapon --priority ${priority} "${swapfilePath}"`);
 
     console.log(`[Swapfile] Swapfile ${swapfilePath} created and activated (${size}, priority=${priority})`);
-    this._notify(`Swapfile created and activated (${size})`);
+    this._notify(`Swapfile created and activated (${size})`, 'info');
   }
 
   /**
@@ -368,7 +368,7 @@ class SwapService {
     // Remove file
     console.log(`[Swapfile] Removing swapfile ${swapfilePath}`);
     await fs.unlink(swapfilePath);
-    this._notify('Swapfile removed');
+    this._notify('Swapfile removed', 'info');
 
     return true;
   }
@@ -536,7 +536,7 @@ class SwapService {
         try {
           await fs.access(swapfilePath);
           await execPromise(`swapon --priority ${newPriority} "${swapfilePath}"`);
-          this._notify('Swapfile reactivated');
+          this._notify('Swapfile reactivated', 'info');
         } catch {
           this._createInBackground(newPath, newSize, validation.isBtrfs, newPriority, newConfig, currentConfig);
           return { enabled: true, path: newPath, size: newSize, priority: newPriority, config: newConfig, status: 'creating' };
@@ -555,7 +555,7 @@ class SwapService {
    * @private
    */
   async _createInBackground(path, size, isBtrfs, priority, config, prevConfig) {
-    this._notify('Swapfile creation started');
+    this._notify('Swapfile creation started', 'info');
     try {
       await this.createSwapfile(path, size, isBtrfs, priority);
       await this.configureZswap(config, prevConfig);

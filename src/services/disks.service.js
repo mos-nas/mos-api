@@ -2823,7 +2823,7 @@ class DisksService {
     await this._sendNotification(
       'Preclear',
       `Preclear aborted on ${deviceName}`,
-      'normal'
+      'info'
     );
 
     return {
@@ -3075,7 +3075,7 @@ class DisksService {
     await this._sendNotification(
       'Preclear',
       `Preclear started on ${deviceName} (${algorithmDisplayName}, ${effectiveWipes} pass${effectiveWipes > 1 ? 'es' : ''})`,
-      'normal'
+      'info'
     );
 
     // Run wipe passes
@@ -3100,7 +3100,7 @@ class DisksService {
         await this._sendNotification(
           'Preclear',
           `Pass ${pass}/${effectiveWipes} started on ${deviceName} (${passAlgorithmDisplay})`,
-          'normal'
+          'info'
         );
 
         // Execute wipe
@@ -3110,7 +3110,7 @@ class DisksService {
         await this._sendNotification(
           'Preclear',
           `Pass ${pass}/${effectiveWipes} completed on ${deviceName}`,
-          'normal'
+          'info'
         );
       }
 
@@ -3120,7 +3120,7 @@ class DisksService {
         await this._sendNotification(
           'Preclear',
           `ReadCheck started on ${deviceName}`,
-          'normal'
+          'info'
         );
 
         readCheckResult = await this._executeReadCheck(devicePath, log);

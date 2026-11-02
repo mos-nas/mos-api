@@ -882,7 +882,7 @@ async function installPlugin(templatePath, tag) {
     // Use Hub template values for driver, donate, support, homepage (not from plugin.config.js)
     // Send notification with displayName
     const notifyName = configDisplayName || hubDisplayName || configName;
-    await _sendNotification('Plugin', `Installing ${notifyName} Version: ${tag}`, 'normal');
+    await _sendNotification('Plugin', `Installing ${notifyName} Version: ${tag}`, 'info');
 
     // Create target directories
     pluginBaseDir = path.join(PLUGINS_CONFIG_DIR, configName);
@@ -1003,7 +1003,7 @@ async function installPlugin(templatePath, tag) {
       }
     }
 
-    await _sendNotification('Plugin', `${notifyName} Version: ${tag} installed successfully`, 'normal');
+    await _sendNotification('Plugin', `${notifyName} Version: ${tag} installed successfully`, 'info');
 
     // Cleanup cache directory (files already copied to plugin dir)
     if (cacheDir) await fs.rm(cacheDir, { recursive: true, force: true }).catch(() => {});
@@ -1184,7 +1184,7 @@ async function checkUpdates(options = {}) {
     const updatable = results.filter(r => r.update_available);
     if (updatable.length > 0) {
       const names = updatable.map(r => r.plugin).join(', ');
-      await _sendNotification('Plugin', `Update for Plugins: ${names} found.`, 'normal');
+      await _sendNotification('Plugin', `Update for Plugins: ${names} found.`, 'info');
     }
   }
 
@@ -1242,7 +1242,7 @@ async function updatePlugins(pluginName = null) {
       const newTag = plugin.available;
       const notifyName = template.displayName || plugin.plugin;
 
-      await _sendNotification('Plugin', `Updating ${notifyName} to Version: ${plugin.available}`, 'normal');
+      await _sendNotification('Plugin', `Updating ${notifyName} to Version: ${plugin.available}`, 'info');
 
       // Parse repository (GitHub or Gitea/Codeberg)
       const repoInfo = _parseRepoUrl(plugin.repository);
@@ -1393,7 +1393,7 @@ async function updatePlugins(pluginName = null) {
         await fs.rm(tempDir, { recursive: true, force: true });
         await fs.rm(cacheDir, { recursive: true, force: true }).catch(() => {});
 
-        await _sendNotification('Plugin', `${notifyName} updated to Version: ${newTag}`, 'normal');
+        await _sendNotification('Plugin', `${notifyName} updated to Version: ${newTag}`, 'info');
         results.push({ plugin: plugin.plugin, from: oldTag, to: newTag, success: true });
 
       } catch (err) {
@@ -1630,7 +1630,7 @@ async function executeFunction(pluginName, functionName, displayName = null, res
   const notifyName = displayName || null;
 
   if (notifyName) {
-    await _sendNotification('Plugin', `Executing ${notifyName}`, 'normal');
+    await _sendNotification('Plugin', `Executing ${notifyName}`, 'info');
   }
 
   try {
@@ -1653,7 +1653,7 @@ async function executeFunction(pluginName, functionName, displayName = null, res
       const successMsg = restart
         ? `${notifyName} completed successfully, please reboot your server`
         : `${notifyName} completed successfully`;
-      await _sendNotification('Plugin', successMsg, restart ? 'warning' : 'normal');
+      await _sendNotification('Plugin', successMsg, restart ? 'warning' : 'info');
     }
 
   } catch (error) {

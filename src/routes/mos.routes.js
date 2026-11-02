@@ -3961,7 +3961,7 @@ router.post('/updateos', async (req, res) => {
             if (updatable.length > 0) {
               await pluginsService.updatePlugins();
             } else {
-              await pluginsService.sendNotification('Plugin', 'All Plugins up-to-date', 'normal');
+              await pluginsService.sendNotification('Plugin', 'All Plugins up-to-date', 'info');
             }
           } catch {
             // Plugin update errors must not block the reboot notification

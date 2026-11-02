@@ -2267,7 +2267,7 @@ lxc.mount.auto = cgroup:mixed:force
     let iconCopied = false;
 
     try {
-      await sendNotification('LXC Backup', `Starting backup of ${containerName}`, 'normal');
+      await sendNotification('LXC Backup', `Starting backup of ${containerName}`, 'info');
 
       const lxcPath = await this.getLxcPath();
       const containerPath = `${lxcPath}/${containerName}`;
@@ -2446,7 +2446,7 @@ lxc.mount.auto = cgroup:mixed:force
       await this._cleanupOldBackups(containerBackupPath, containerName, backupsToKeep);
 
       activeOperations.delete(containerName);
-      await sendNotification('LXC Backup', `Backup of ${containerName} completed: ${backupFilename}`, 'normal');
+      await sendNotification('LXC Backup', `Backup of ${containerName} completed: ${backupFilename}`, 'info');
 
     } catch (error) {
       activeOperations.delete(containerName);
@@ -2745,7 +2745,7 @@ lxc.mount.auto = cgroup:mixed:force
     const containerPath = `${lxcPath}/${newName}`;
 
     try {
-      await sendNotification('LXC Restore', `Starting restore of ${newName} from ${backupFilename}`, 'normal');
+      await sendNotification('LXC Restore', `Starting restore of ${newName} from ${backupFilename}`, 'info');
 
       // Stop and destroy existing container if needed
       if (targetExists) {
@@ -2856,7 +2856,7 @@ lxc.mount.auto = cgroup:mixed:force
       this.invalidateContainerMetadataCache(newName);
 
       activeOperations.delete(newName);
-      await sendNotification('LXC Restore', `Container ${newName} restored successfully from ${backupFilename}`, 'normal');
+      await sendNotification('LXC Restore', `Container ${newName} restored successfully from ${backupFilename}`, 'info');
 
     } catch (error) {
       activeOperations.delete(newName);
@@ -2927,7 +2927,7 @@ lxc.mount.auto = cgroup:mixed:force
     const tempPath = `${containerPath}/rootfs.old`;
 
     try {
-      await sendNotification('LXC Convert', `Starting BTRFS conversion for ${containerName}`, 'normal');
+      await sendNotification('LXC Convert', `Starting BTRFS conversion for ${containerName}`, 'info');
 
       // Stop container
       if (wasRunning) {
@@ -2961,7 +2961,7 @@ lxc.mount.auto = cgroup:mixed:force
       }
 
       activeOperations.delete(containerName);
-      await sendNotification('LXC Convert', `Container ${containerName} converted to BTRFS`, 'normal');
+      await sendNotification('LXC Convert', `Container ${containerName} converted to BTRFS`, 'info');
 
     } catch (error) {
       activeOperations.delete(containerName);
@@ -3284,7 +3284,7 @@ lxc.mount.auto = cgroup:mixed:force
    */
   async _runCloneFromSnapshot(sourceContainer, snapshotName, newName) {
     try {
-      await sendNotification('LXC Snapshot', `Cloning ${newName} from ${sourceContainer}/${snapshotName}`, 'normal');
+      await sendNotification('LXC Snapshot', `Cloning ${newName} from ${sourceContainer}/${snapshotName}`, 'info');
 
       const lxcPath = await this.getLxcPath();
       const snapshotPath = `${lxcPath}/${sourceContainer}/snaps/${snapshotName}`;
@@ -3350,7 +3350,7 @@ lxc.mount.auto = cgroup:mixed:force
       }
 
       activeOperations.delete(sourceContainer);
-      await sendNotification('LXC Snapshot', `Container ${newName} cloned successfully`, 'normal');
+      await sendNotification('LXC Snapshot', `Container ${newName} cloned successfully`, 'info');
 
     } catch (error) {
       activeOperations.delete(sourceContainer);
@@ -3367,7 +3367,7 @@ lxc.mount.auto = cgroup:mixed:force
    */
   async _runRestoreSnapshot(containerName, snapshotName, wasRunning) {
     try {
-      await sendNotification('LXC Snapshot', `Restoring ${containerName} from snapshot ${snapshotName}`, 'normal');
+      await sendNotification('LXC Snapshot', `Restoring ${containerName} from snapshot ${snapshotName}`, 'info');
 
       const lxcPath = await this.getLxcPath();
       const containerPath = `${lxcPath}/${containerName}`;
@@ -3425,7 +3425,7 @@ lxc.mount.auto = cgroup:mixed:force
       this.invalidateContainerMetadataCache(containerName);
 
       activeOperations.delete(containerName);
-      await sendNotification('LXC Snapshot', `Snapshot ${snapshotName} restored to ${containerName}`, 'normal');
+      await sendNotification('LXC Snapshot', `Snapshot ${snapshotName} restored to ${containerName}`, 'info');
 
     } catch (error) {
       activeOperations.delete(containerName);

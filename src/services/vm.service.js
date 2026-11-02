@@ -2870,7 +2870,7 @@ class VmService {
       await this._sendNotification(
         'VMs',
         `Started download of VirtIO ISO ${version}. You will be notified when the download is finished.`,
-        'normal'
+        'info'
       );
 
       // Monitor download completion in background
@@ -2879,7 +2879,7 @@ class VmService {
           await this._sendNotification(
             'VMs',
             `Download of VirtIO ISO ${version} finished`,
-            'normal'
+            'info'
           );
         } else {
           // Clean up failed download
@@ -2891,7 +2891,7 @@ class VmService {
           await this._sendNotification(
             'VMs',
             `Download of VirtIO ISO ${version} failed`,
-            'warning'
+            'alert'
           );
         }
       });
