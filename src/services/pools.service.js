@@ -9838,7 +9838,7 @@ class PoolsService {
           const deviceSize = await this._getDeviceSizeInKB(replacement.preparedDevice);
           const deviceBasename = path.basename(replacement.preparedDevice);
 
-          const importCmd = `echo "import ${slot} ${deviceBasename} 0 ${deviceSize} 0 ${device.id}" > /proc/nmdcmd`;
+          const importCmd = `echo "import ${slot} ${deviceBasename} 0 ${deviceSize} 0 ${replacement.partuuid}" > /proc/nmdcmd`;
           console.log(`Importing NEW data device slot ${slot}: ${importCmd}`);
           await execPromise(importCmd);
           device.partuuid = replacement.partuuid;
