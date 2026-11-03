@@ -30,7 +30,7 @@ const dockerComposeService = require('../services/dockercompose.service');
  *             type: string
  *           description: Container names
  *           example: ["wordpress_web_1", "wordpress_db_1"]
- *         iconUrl:
+ *         icon:
  *           type: string
  *           nullable: true
  *           description: Icon URL
@@ -112,12 +112,12 @@ router.use(checkRole(['admin']));
  *               - name: "wordpress"
  *                 services: ["web", "db"]
  *                 containers: ["wordpress_web_1", "wordpress_db_1"]
- *                 iconUrl: "https://example.com/icon.png"
+ *                 icon: "https://example.com/icon.png"
  *                 running: true
  *               - name: "nextcloud"
  *                 services: ["app", "db", "redis"]
  *                 containers: ["nextcloud_app_1", "nextcloud_db_1", "nextcloud_redis_1"]
- *                 iconUrl: null
+ *                 icon: null
  *                 running: false
  *       401:
  *         description: Not authenticated
@@ -181,7 +181,7 @@ router.get('/stacks', async (req, res) => {
  *                   type: array
  *                   items:
  *                     type: string
- *                 iconUrl:
+ *                 icon:
  *                   type: string
  *                   nullable: true
  *                 running:
@@ -989,7 +989,7 @@ router.get('/templates', async (req, res) => {
  *                   type: string
  *                   nullable: true
  *                   description: .env file content
- *                 iconUrl:
+ *                 icon:
  *                   type: string
  *                   nullable: true
  *                   description: Icon URL
@@ -1008,7 +1008,7 @@ router.get('/templates', async (req, res) => {
  *               name: "wordpress_new"
  *               yaml: "version: '3'\nservices:\n  web:\n    image: wordpress:latest"
  *               env: "DB_HOST=db"
- *               iconUrl: "https://example.com/icon.png"
+ *               icon: "https://example.com/icon.png"
  *               autostart: false
  *               webui: null
  *               source: "installed"

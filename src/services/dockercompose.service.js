@@ -369,15 +369,8 @@ class DockerComposeService {
 
       return iconPath;
     } catch (error) {
-      // Icon download failure is not critical
-      // If download failed, check if old icon exists and keep it
-      try {
-        await fs.access(iconPath);
-        return iconPath;
-      } catch (accessError) {
-        // No existing icon either
-        return null;
-      }
+      // Icon download failed - throw so the caller knows the update didn't succeed
+      throw new Error(`Failed to download icon from ${iconUrl}: ${error.message}`);
     }
   }
 
@@ -892,10 +885,15 @@ class DockerComposeService {
       const mosOverridePath = path.join(stackPath, 'mos.override.yaml');
       await fs.writeFile(mosOverridePath, mosOverride);
 
-      // Download icon (non-critical)
+      // Download icon (non-critical - failure should not abort stack creation)
       let iconPath = null;
       if (iconUrl) {
-        iconPath = await this._downloadIcon(iconUrl, name);
+        try {
+          iconPath = await this._downloadIcon(iconUrl, name);
+        } catch (iconError) {
+          console.warn(`Failed to download icon for stack '${name}': ${iconError.message}`);
+          // iconPath remains null, stack will be created without custom icon
+        }
       }
 
       // Step 3-4: Copy files from boot to working directory (compose_STACKNAME)
@@ -1098,7 +1096,7 @@ class DockerComposeService {
               name: entry.name,
               services: services,
               containers: containers,
-              iconUrl: iconUrl,
+              icon: iconUrl,
               autostart: autostart,
               webui: webui,
               no_autoupdate: noAutoupdate,
@@ -1199,7 +1197,7 @@ class DockerComposeService {
         env: envContent,
         services: services,
         containers: containers,
-        iconUrl: iconUrl,
+        icon: iconUrl,
         autostart: autostart,
         webui: webui,
         no_autoupdate: noAutoupdate,
@@ -1282,10 +1280,15 @@ class DockerComposeService {
       const mosOverridePath = path.join(stackPath, 'mos.override.yaml');
       await fs.writeFile(mosOverridePath, mosOverride);
 
-      // Update icon if URL provided
+      // Update icon if URL provided (non-critical - failure keeps previous icon)
       let iconPath = null;
       if (iconUrl) {
-        iconPath = await this._downloadIcon(iconUrl, name);
+        try {
+          iconPath = await this._downloadIcon(iconUrl, name);
+        } catch (iconError) {
+          console.warn(`Failed to download icon for stack '${name}': ${iconError.message}`);
+          // iconPath remains null, existing icon will be preserved
+        }
       }
 
       // Step 3-4: Copy updated files from boot to working directory
@@ -1892,7 +1895,7 @@ class DockerComposeService {
         name: templateName,
         yaml: yaml,
         env: envContent,
-        iconUrl: iconUrl,
+        icon: iconUrl,
         autostart: autostart,
         webui: webui,
         no_autoupdate: noAutoupdate,

@@ -1460,17 +1460,23 @@ class DockerWebSocketManager extends EventEmitter {
       // Update icon if provided
       let iconPath = null;
       if (icon) {
-        iconPath = await this.dockerComposeService._downloadIcon(icon, name);
-        if (iconPath) {
+        try {
+          iconPath = await this.dockerComposeService._downloadIcon(icon, name);
           this.sendUpdate(null, operationId, 'running', {
             output: `Icon updated\n`,
             stream: 'stdout'
           });
-        } else {
+        } catch (iconError) {
           this.sendUpdate(null, operationId, 'running', {
-            output: `Warning: Failed to download icon\n`,
+            output: `Warning: Failed to download icon, keeping previous icon\n`,
             stream: 'stdout'
           });
+          // Keep the existing icon from the group
+          const groups = await this.dockerService.getContainerGroups();
+          const group = groups.find(g => g.name === name && g.compose === true);
+          if (group && group.icon) {
+            iconPath = null; // Will use existingGroup.icon below
+          }
         }
       }
 
