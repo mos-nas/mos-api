@@ -48,6 +48,8 @@ class PoolsService {
     this._diskInfoMapCache = null;
     this._diskInfoMapCacheTimestamp = 0;
     this._diskInfoMapCacheTTL = 30000; // 30 seconds
+    this._zfsImportCache = null;
+    this._zfsImportCacheTTL = 30000; // 30 seconds
 
     // NonRAID operation monitor state
     this._nonRaidMonitor = {
@@ -3072,7 +3074,7 @@ class PoolsService {
       const pools = await this._readPools();
 
       // Check if pool exists
-      if (pools.some(p => p.name === name)) {
+      if (pools.some(p => p.name === name) || (await this._zfsPoolNameExists(name))) {
         throw new Error(`Pool with name "${name}" already exists`);
       }
 
@@ -4886,7 +4888,7 @@ class PoolsService {
       const pools = await this._readPools();
 
       // Check if pool with the same name already exists
-      if (pools.some(p => p.name === name)) {
+      if (pools.some(p => p.name === name) || (await this._zfsPoolNameExists(name))) {
         throw new Error(`Pool with name "${name}" already exists`);
       }
 
@@ -6771,6 +6773,251 @@ class PoolsService {
    * @param {string} filters.exclude_type - Exclude pools of specific type (e.g., 'mergerfs')
    * @param {Object} user - User object with byte_format preference
    */
+  /**
+   * Build read-only pool objects for native ZFS pools (openzfs plugin managed).
+   * These pools live outside pools.json and are injected into API responses only.
+   * Visibility convention: effective mountpoint equals /mnt/<poolname>.
+   * Exported (unimported) pools are included from the `zpool import` listing without
+   * sizes and flagged not mounted; `zpool import -N` is never used as it mutates state.
+   * @returns {Promise<Array<Object>>} Array of ZFS pool objects
+   */
+  async _getZfsPools() {
+    try {
+      await execPromise('command -v zpool');
+    } catch (error) {
+      // openzfs plugin not installed
+      return [];
+    }
+
+    const pools = [];
+    this._zfsHealthMap = {};
+
+    try {
+      const { stdout: zpoolList } = await execPromise('zpool list -H -o name,size,allocated,capacity,free,health,altroot');
+      for (const line of zpoolList.trim().split('\n').filter(l => l)) {
+        const [name, size, allocated, capacity, free, health, altroot] = line.split('\t');
+        // Pools with an altroot do not follow the /mnt/<name> convention
+        if (altroot !== '-') continue;
+        if ((await this._getZfsMountPoint(name)) !== path.join(this.mountBasePath, name)) continue;
+
+        this._zfsHealthMap[name] = health;
+        pools.push({
+          id: `zfs-${name}`,
+          name,
+          type: 'zfs',
+          external: true,
+          automount: true,
+          comment: '',
+          index: null,
+          config: { encrypted: false, shared: false, usage_alert: { warning: 70, alert: 90 } },
+          data_devices: await this._getZfsPoolDevices(name),
+          parity_devices: [],
+          zfsSpace: {
+            totalSpace: this._parseZfsSize(size),
+            usedSpace: this._parseZfsSize(allocated),
+            freeSpace: this._parseZfsSize(free),
+            usagePercent: parseInt(capacity) || 0
+          }
+        });
+      }
+    } catch (error) {
+      console.warn(`Warning: Could not list ZFS pools: ${error.message}`);
+    }
+
+    try {
+      // Exported pools: name/state/devices only, no sizes, never shown mounted.
+      // Cached for 30s: the import scan re-reads candidate disks and could wake
+      // standby disks, so it must not run on every WS poll.
+      let importList;
+      if (!this._zfsImportCache || Date.now() - this._zfsImportCache.timestamp > this._zfsImportCacheTTL) {
+        const { stdout } = await execPromise('zpool import 2>/dev/null || true');
+        this._zfsImportCache = { timestamp: Date.now(), output: stdout };
+      }
+      importList = this._zfsImportCache.output;
+      const importableNames = new Set(pools.map(p => p.name));
+      let currentPool = null;
+      for (const line of importList.split('\n')) {
+        const poolMatch = line.match(/^\s*pool:\s+(\S+)/);
+        if (poolMatch) {
+          currentPool = poolMatch[1];
+          continue;
+        }
+        if (!currentPool) continue;
+        // Device lines under "config:" are indented below the pool name line
+        const deviceMatch = line.match(/^\t\s+(\S+)\s+(ONLINE|OFFLINE|DEGRADED|FAULTED|UNAVAIL\w*)/);
+        if (deviceMatch) {
+          const device = deviceMatch[1].startsWith('/dev/') ? deviceMatch[1] : `/dev/disk/by-id/${deviceMatch[1]}`;
+          let zfsPool = pools.find(p => p.name === currentPool);
+          if (!zfsPool) {
+            if (importableNames.has(currentPool)) continue;
+            importableNames.add(currentPool);
+            this._zfsHealthMap[currentPool] = 'offline';
+            zfsPool = {
+              id: `zfs-${currentPool}`,
+              name: currentPool,
+              type: 'zfs',
+              external: true,
+              automount: true,
+              comment: '',
+              index: null,
+              config: { encrypted: false, shared: false, usage_alert: { warning: 70, alert: 90 } },
+              data_devices: [],
+              parity_devices: [],
+              zfsSpace: { totalSpace: 0, usedSpace: 0, freeSpace: 0, usagePercent: 0 }
+            };
+            pools.push(zfsPool);
+          }
+          zfsPool.data_devices.push({
+            slot: zfsPool.data_devices.length + 1,
+            id: null,
+            device,
+            filesystem: 'zfs',
+            spindown: null,
+            group: null,
+            durability: null
+          });
+        }
+      }
+    } catch (error) {
+      // Exported pool listing not available
+    }
+
+    return pools;
+  }
+
+  /**
+   * Get the effective mountpoint property of a ZFS pool's root dataset
+   * @param {string} poolName - ZFS pool name
+   * @returns {Promise<string>} Mountpoint or empty string when unknown
+   */
+  async _getZfsMountPoint(poolName) {
+    const { stdout } = await execPromise(`zfs get -H -o value mountpoint ${poolName} 2>/dev/null || true`);
+    const value = stdout.trim();
+    return value && value !== '-' && value !== 'none' ? value : '';
+  }
+
+  /**
+   * Parse leaf device paths from the zpool status vdev tree
+   * @param {string} poolName - ZFS pool name
+   * @returns {Promise<Array<{slot: number, device: string, filesystem: string}>>}
+   */
+  async _getZfsPoolDevices(poolName) {
+    const { stdout } = await execPromise(`zpool status -P ${poolName} 2>/dev/null || true`);
+    const devices = [];
+    for (const line of stdout.split('\n')) {
+      const match = line.match(/^\s+(\/dev\/\S+)/);
+      if (match) {
+        // Resolve symlinks (e.g. /dev/disk/by-id/... -> /dev/sdg1) for display consistency
+        const { stdout: realPath } = await execPromise(`readlink -f "${match[1]}" 2>/dev/null || true`);
+        const device = realPath.trim() || match[1];
+        devices.push({
+          slot: devices.length + 1,
+          id: null,
+          device,
+          filesystem: 'zfs',
+          spindown: null,
+          group: null,
+          durability: null
+        });
+      }
+    }
+    return devices;
+  }
+
+  /**
+   * Convert a ZFS human size string (e.g. "928G", "292K", "1.5T") to bytes
+   * @param {string} value - Size string as printed by zpool list -H
+   * @returns {number} Size in bytes, 0 for '-' and unparseable values
+   */
+  _parseZfsSize(value) {
+    if (!value || value === '-') return 0;
+    const match = value.match(/^([\d.]+)([KMGTPE])?$/);
+    if (!match) return 0;
+    const units = { K: 1024, M: 1024 ** 2, G: 1024 ** 3, T: 1024 ** 4, P: 1024 ** 5, E: 1024 ** 6 };
+    return Math.round(parseFloat(match[1]) * (match[2] ? units[match[2]] : 1));
+  }
+
+  /**
+   * Check whether a pool name is taken by an external ZFS pool
+   * (they share the /mnt/<name> mountpoint namespace)
+   * @param {string} name - Pool name to check
+   * @returns {Promise<boolean>}
+   */
+  async _zfsPoolNameExists(name) {
+    return (await this._getZfsPools()).some(pool => pool.name === name);
+  }
+
+  /**
+   * Enrich a pool with all dynamic display information for API responses.
+   * Shared by listPools() and getPoolById(), also used for external ZFS pools.
+   * @param {Object} pool - Pool object
+   * @param {Object} user - User object with byte_format preference
+   * @param {Object} dfData - Optional shared df data
+   */
+  async _enrichPoolForDisplay(pool, user = null, dfData = null) {
+    // Inject real device paths for API display
+    await this._injectRealDevicePaths(pool);
+
+    // Enrich device information with disk type details (parallel per pool)
+    // These only read from /sys filesystem, no disk wake-up
+    const enrichPromises = [];
+    if (pool.data_devices && pool.data_devices.length > 0) {
+      enrichPromises.push(...pool.data_devices.map(async (dev, i) => {
+        pool.data_devices[i] = await this._enrichDeviceWithDiskTypeInfo(dev);
+      }));
+    }
+    if (pool.parity_devices && pool.parity_devices.length > 0) {
+      enrichPromises.push(...pool.parity_devices.map(async (dev, i) => {
+        pool.parity_devices[i] = await this._enrichDeviceWithDiskTypeInfo(dev);
+      }));
+    }
+    if (enrichPromises.length > 0) {
+      await Promise.all(enrichPromises);
+    }
+
+    // Update mount status and space info
+    if (pool.data_devices && pool.data_devices.length > 0) {
+      const mountPoint = path.join(this.mountBasePath, pool.name);
+      const isMounted = await this._isMounted(mountPoint);
+      if (isMounted) {
+        const spaceInfo = await this.getDeviceSpace(mountPoint, user);
+        pool.status = spaceInfo;
+        pool.mountPoint = mountPoint;
+      } else {
+        pool.status = { mounted: false };
+        // Don't set mountPoint if not mounted
+      }
+    }
+
+    // Every pool reports the external flag explicitly (response-only, never persisted)
+    if (!pool.external) {
+      pool.external = false;
+    }
+
+    // ZFS pools: report real zpool health instead of the df-based "healthy".
+    // Unmounted pools keep the plain { mounted: false } shape like all other pools.
+    if (pool.type === 'zfs') {
+      if (pool.status.mounted) {
+        const health = (this._zfsHealthMap?.[pool.name] || 'unknown').toLowerCase();
+        pool.status.health = health === 'online' ? 'healthy' : health;
+      }
+      delete pool.zfsSpace;
+    }
+
+    // Inject storage info first (needed before power status for context)
+    await this._injectStorageInfoIntoDevices(pool, user, dfData);
+
+    // Run power status and disk info injection in parallel
+    // Both are independent read-only operations, standby handling preserved
+    await Promise.all([
+      this._injectPowerStatusIntoDevices(pool),
+      this._injectDiskInfoIntoDevices(pool)
+    ]);
+
+    // Inject parity operation status (API-only, not persisted)
+    await this._injectParityOperationStatus(pool, user);
+  }
+
   async listPools(filters = {}, user = null) {
     try {
       let pools = await this._readPools();
@@ -6796,6 +7043,8 @@ class PoolsService {
       // Ensure scrub config exists for all MergerFS pools with parity
       let poolsModified = false;
       for (const pool of pools) {
+        // External pools (ZFS) are never persisted to pools.json
+        if (pool.external) continue;
         if (this._ensureScrubConfig(pool)) {
           poolsModified = true;
         }
@@ -6817,57 +7066,31 @@ class PoolsService {
         await this._writePools(pools);
       }
 
+      // Inject native ZFS pools after the persist step so they can never be written
+      // to pools.json; type filters are applied to them here as well.
+      // Index them after the last managed pool so ordered frontends keep them at the end
+      let zfsPools = await this._getZfsPools();
+      if (filters.type) {
+        zfsPools = zfsPools.filter(pool => pool.type === filters.type);
+      }
+      if (filters.exclude_type) {
+        zfsPools = zfsPools.filter(pool => pool.type !== filters.exclude_type);
+      }
+      let maxIndex = 0;
+      for (const pool of pools) {
+        if (!pool.external && typeof pool.index === 'number' && pool.index > maxIndex) {
+          maxIndex = pool.index;
+        }
+      }
+      zfsPools.forEach((pool, i) => { pool.index = maxIndex + i + 1; });
+      pools.push(...zfsPools);
+
       // One df run for all pools instead of one per pool
       const dfData = await this._getDfData();
 
       // For each pool, update its mounted status and space info
       for (const pool of pools) {
-        // Inject real device paths for API display
-        await this._injectRealDevicePaths(pool);
-
-        // Enrich device information with disk type details (parallel per pool)
-        // These only read from /sys filesystem, no disk wake-up
-        const enrichPromises = [];
-        if (pool.data_devices && pool.data_devices.length > 0) {
-          enrichPromises.push(...pool.data_devices.map(async (dev, i) => {
-            pool.data_devices[i] = await this._enrichDeviceWithDiskTypeInfo(dev);
-          }));
-        }
-        if (pool.parity_devices && pool.parity_devices.length > 0) {
-          enrichPromises.push(...pool.parity_devices.map(async (dev, i) => {
-            pool.parity_devices[i] = await this._enrichDeviceWithDiskTypeInfo(dev);
-          }));
-        }
-        if (enrichPromises.length > 0) {
-          await Promise.all(enrichPromises);
-        }
-
-        // Update mount status and space info
-        if (pool.data_devices && pool.data_devices.length > 0) {
-          const mountPoint = path.join(this.mountBasePath, pool.name);
-          const isMounted = await this._isMounted(mountPoint);
-          if (isMounted) {
-            const spaceInfo = await this.getDeviceSpace(mountPoint, user);
-            pool.status = spaceInfo;
-            pool.mountPoint = mountPoint;
-          } else {
-            pool.status = { mounted: false };
-            // Don't set mountPoint if not mounted
-          }
-        }
-
-        // Inject storage info first (needed before power status for context)
-        await this._injectStorageInfoIntoDevices(pool, user, dfData);
-
-        // Run power status and disk info injection in parallel
-        // Both are independent read-only operations, standby handling preserved
-        await Promise.all([
-          this._injectPowerStatusIntoDevices(pool),
-          this._injectDiskInfoIntoDevices(pool)
-        ]);
-
-        // Inject parity operation status (API-only, not persisted)
-        await this._injectParityOperationStatus(pool, user);
+        await this._enrichPoolForDisplay(pool, user, dfData);
       }
 
       // Note: We don't write back to pools.json for read-only operations
@@ -6890,7 +7113,13 @@ class PoolsService {
       const poolIndex = pools.findIndex(p => p.id === poolId);
 
       if (poolIndex === -1) {
-        throw new Error(`Pool with ID "${poolId}" not found`);
+        // External ZFS pools are not in pools.json but resolvable by their synthetic id
+        const zfsPool = (await this._getZfsPools()).find(p => p.id === poolId);
+        if (!zfsPool) {
+          throw new Error(`Pool with ID "${poolId}" not found`);
+        }
+        await this._enrichPoolForDisplay(zfsPool, user, await this._getDfData());
+        return zfsPool;
       }
 
       const pool = pools[poolIndex];
@@ -6936,6 +7165,11 @@ class PoolsService {
         const mountPoint = path.join(this.mountBasePath, pool.name);
         const spaceInfo = await this.getDeviceSpace(mountPoint, user);
         pool.status = spaceInfo;
+
+        // Every pool reports the external flag explicitly (response-only, never persisted)
+        if (!pool.external) {
+          pool.external = false;
+        }
 
         // Inject storage info first (needed before power status for context)
         await this._injectStorageInfoIntoDevices(pool, user);
@@ -7374,6 +7608,9 @@ class PoolsService {
 
         const pool = pools.find(p => p.id === item.id);
         if (!pool) {
+          if (String(item.id).startsWith('zfs-')) {
+            throw new Error(`External ZFS pool "${item.id.slice(4)}" cannot be reordered`);
+          }
           throw new Error(`Pool with ID "${item.id}" not found`);
         }
       }
@@ -8218,7 +8455,7 @@ class PoolsService {
       const pools = await this._readPools();
 
       // Check if pool exists
-      if (pools.some(p => p.name === name)) {
+      if (pools.some(p => p.name === name) || (await this._zfsPoolNameExists(name))) {
         throw new Error(`Pool with name "${name}" already exists`);
       }
 
@@ -8719,7 +8956,7 @@ class PoolsService {
       }
 
       // Check if pool exists
-      if (pools.some(p => p.name === name)) {
+      if (pools.some(p => p.name === name) || (await this._zfsPoolNameExists(name))) {
         throw new Error(`Pool with name "${name}" already exists`);
       }
 

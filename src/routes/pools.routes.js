@@ -41,6 +41,10 @@ router.use('/vpools', require('./vpools.routes'));
  *           type: string
  *           description: Pool type
  *           example: "btrfs"
+ *         external:
+ *           type: boolean
+ *           description: True for pools managed outside pools.json (native ZFS pools via openzfs plugin) - read-only, cannot be mounted/unmounted/modified through the API
+ *           example: false
  *         automount:
  *           type: boolean
  *           description: Whether pool is automatically mounted
@@ -925,7 +929,7 @@ router.patch('/:id/config', checkRole(['admin']), async (req, res) => {
  * /pools/order:
  *   put:
  *     summary: Update order of all pools
- *     description: Update the display order for multiple pools at once by providing an array of pool IDs with their new index values (admin only)
+ *     description: Update the display order for multiple pools at once by providing an array of pool IDs with their new index values (admin only). External pools (type zfs, flag external) are managed outside pools.json and cannot be reordered
  *     tags: [Pools]
  *     security:
  *       - bearerAuth: []
