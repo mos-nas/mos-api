@@ -158,6 +158,8 @@ class BcachefsHelpers {
 
   /**
    * Build the argument list for `bcachefs format`
+   * -f is required because format asks interactively about existing signatures on the target
+   * devices, and without a tty that prompt blocks the API call indefinitely
    * Device options are sticky for all following devices, so devices are emitted grouped and
    * every group repeats --durability to avoid inheriting the previous group's value
    * @param {string} name - Pool name (used as filesystem label)
@@ -168,6 +170,7 @@ class BcachefsHelpers {
   static buildFormatArgs(name, deviceEntries, config) {
     const args = [
       'format',
+      '-f',
       `--fs_label=${name}`,
       `--data_replicas=${config.data_replicas}`,
       `--metadata_replicas=${config.metadata_replicas}`

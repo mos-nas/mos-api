@@ -3178,6 +3178,7 @@ class PoolsService {
       await this._writePools(pools);
 
       // Mount or cleanup
+      let automountWarning = null;
       if (newPool.automount) {
         try {
           const deviceToMount = operationalDevices[0];
@@ -3185,6 +3186,7 @@ class PoolsService {
           await this._updateBtrfsDevicePathsInPool(newPool, mountPoint);
         } catch (mountError) {
           console.warn(`Automount failed for pool ${name}: ${mountError.message}`);
+          automountWarning = mountError.message;
         }
       } else {
         // Close devices if not automounting
@@ -3194,7 +3196,8 @@ class PoolsService {
       return {
         success: true,
         message: `Successfully created multi-device BTRFS pool "${name}" with ${raidLevel} configuration`,
-        pool: newPool
+        pool: newPool,
+        ...(automountWarning ? { warning: `Automount failed: ${automountWarning}` } : {})
       };
     } catch (error) {
       // Cleanup on error
@@ -3426,6 +3429,7 @@ class PoolsService {
       await this._writePools(pools);
 
       // Mount or close the LUKS devices again
+      let automountWarning = null;
       if (newPool.automount) {
         try {
           await this._createDirectoryWithOwnership(mountPoint, this.defaultOwnership);
@@ -3437,6 +3441,7 @@ class PoolsService {
           }
         } catch (mountError) {
           console.warn(`Automount failed for pool ${name}: ${mountError.message}`);
+          automountWarning = mountError.message;
         }
       } else {
         await strategy.cleanup(preparedDeviceInfos, poolConfig);
@@ -3446,7 +3451,10 @@ class PoolsService {
         success: true,
         message: `Successfully created bcachefs pool "${name}" with ${devices.length} data device(s)` +
           (cacheDevices.length > 0 ? ` and ${cacheDevices.length} cache device(s)` : ''),
-        pool: newPool
+        pool: newPool,
+        // The pool is formatted and persisted, so this is not an error, but the caller must
+        // not be told the pool is usable when it could not be mounted
+        ...(automountWarning ? { warning: `Automount failed: ${automountWarning}` } : {})
       };
     } catch (error) {
       // Cleanup on error
@@ -4998,11 +5006,13 @@ class PoolsService {
       await this._writePools(pools);
 
       // Mount if automount
+      let automountWarning = null;
       if (newPool.automount) {
         try {
           await this.mountDevice(actualDeviceToUse, mountPoint);
         } catch (mountError) {
           console.warn(`Automount failed: ${mountError.message}`);
+          automountWarning = mountError.message;
         }
       } else {
         // Close devices if not automounting
@@ -5017,7 +5027,8 @@ class PoolsService {
           requestedDevice: device,
           actualDevice: actualDeviceToUse,
           encrypted: options.config?.encrypted || false
-        }
+        },
+        ...(automountWarning ? { warning: `Automount failed: ${automountWarning}` } : {})
       };
     } catch (error) {
       // Cleanup on error
@@ -7600,23 +7611,28 @@ class PoolsService {
 
       const pools = await this._readPools();
 
+      // External ZFS pools are never part of the stored order; ignore them in mixed
+      // payloads (frontends submit all visible pools), reject only explicit attempts
+      const managedOrder = order.filter(item => !String(item.id).startsWith('zfs-'));
+      if (managedOrder.length === 0 && order.length > 0) {
+        const externalId = String(order[0].id);
+        throw new Error(`External ZFS pool "${externalId.slice(4)}" cannot be reordered`);
+      }
+
       // Validate all pool IDs exist
-      for (const item of order) {
+      for (const item of managedOrder) {
         if (!item.id || typeof item.index !== 'number') {
           throw new Error('Each order item must have id and index properties');
         }
 
         const pool = pools.find(p => p.id === item.id);
         if (!pool) {
-          if (String(item.id).startsWith('zfs-')) {
-            throw new Error(`External ZFS pool "${item.id.slice(4)}" cannot be reordered`);
-          }
           throw new Error(`Pool with ID "${item.id}" not found`);
         }
       }
 
       // Update indices
-      for (const item of order) {
+      for (const item of managedOrder) {
         const pool = pools.find(p => p.id === item.id);
         if (pool) {
           pool.index = item.index;
@@ -7627,8 +7643,8 @@ class PoolsService {
 
       return {
         success: true,
-        message: `Successfully updated order for ${order.length} pool(s)`,
-        updatedCount: order.length
+        message: `Successfully updated order for ${managedOrder.length} pool(s)`,
+        updatedCount: managedOrder.length
       };
     } catch (error) {
       throw new Error(`Error updating pools order: ${error.message}`);

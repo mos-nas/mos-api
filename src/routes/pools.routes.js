@@ -1075,6 +1075,10 @@ router.put('/order', checkRole(['admin']), async (req, res) => {
  *                 message:
  *                   type: string
  *                   example: "Successfully created single device pool 'data_pool'"
+ *                 warning:
+ *                   type: string
+ *                   description: Only present if the pool was created but automount failed
+ *                   example: "Automount failed: mount: unknown filesystem type 'bcachefs'"
  *                 pool:
  *                   type: object
  *                   description: Created pool object
@@ -1223,6 +1227,9 @@ router.post('/single', checkRole(['admin']), async (req, res) => {
  *                 message:
  *                   type: string
  *                   example: "Successfully created multi-device BTRFS pool 'data_raid1' with raid1 configuration"
+ *                 warning:
+ *                   type: string
+ *                   description: Only present if the pool was created but automount failed
  *                 pool:
  *                   type: object
  *                   description: Created pool object
@@ -1590,6 +1597,10 @@ router.post('/mergerfs', checkRole(['admin']), async (req, res) => {
  *                 message:
  *                   type: string
  *                   example: "Successfully created bcachefs pool 'tank' with 3 data device(s) and 1 cache device(s)"
+ *                 warning:
+ *                   type: string
+ *                   description: Only present if the pool was created but automount failed
+ *                   example: "Automount failed: mount.bcachefs: Mount failed for /dev/sdb1: source /dev/sdc1: Multiple sources"
  *                 pool:
  *                   type: object
  *                   description: Created pool object
