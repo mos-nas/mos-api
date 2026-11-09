@@ -15,9 +15,11 @@ const getBootToken = async () => {
 };
 
 // Paths that are always reachable regardless of token permissions
-// (e.g. a restricted token must always be able to introspect its own rights)
+// (e.g. a restricted token must always be able to introspect its own rights,
+// or fetch a notification WebSocket ticket - ticket only grants read access to the broadcast)
 const ALWAYS_ALLOWED_PATHS = [
-  '/api/v1/auth/admin-tokens/me'
+  '/api/v1/auth/admin-tokens/me',
+  '/api/v1/notifications/ticket'
 ];
 
 // Resources that readonly tokens should never access.

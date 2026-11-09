@@ -1,4 +1,5 @@
 const express = require('express');
+const crypto = require('crypto');
 const router = express.Router();
 const notificationsService = require('../services/notifications.service');
 const webpushService = require('../services/webpush.service');
@@ -108,7 +109,70 @@ const { checkRole } = require('../middleware/auth.middleware');
  *           description: Error message
  */
 
-// Only Admin can access these routes
+/**
+ * @swagger
+ * /notifications/ticket:
+ *   post:
+ *     summary: Get WebSocket ticket for the notification live feed
+ *     description: >
+ *       Issues a short-lived HMAC-signed ticket for connecting to the notification WebSocket at `/api/v1/notify?ticket=...`.
+ *       Available to any authenticated user (JWT, admin API token or boot token) - no admin role required,
+ *       because the ticket only grants read access to the notification broadcast.
+ *       The ticket is signed with the API JWT_SECRET and validated by the mos-notify service. Valid for 15 seconds.
+ *     tags: [Notifications]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Ticket issued successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 ticket:
+ *                   type: string
+ *                   description: Signed ticket (base64url payload + HMAC signature), pass as `?ticket=` query parameter
+ *                   example: "eyJpYXQiOjE3Mjc3MjU5NDYsImV4cCI6MTcyNzcyNTk2NiwidWlkIjoiMSIsInJvbGUiOiJ1c2VyIn0.2f1a..."
+ *       401:
+ *         description: Not authenticated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       503:
+ *         description: JWT secret not available (during initial setup)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+const WS_TICKET_TTL_SECONDS = 15;
+
+router.post('/ticket', async (req, res) => {
+  try {
+    const secret = process.env.JWT_SECRET;
+    if (!secret) {
+      return res.status(503).json({ error: 'JWT secret not available yet. Please retry after startup.' });
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    const payload = {
+      iat: now,
+      exp: now + WS_TICKET_TTL_SECONDS,
+      uid: req.user.id || null,
+      role: req.user.role || null
+    };
+    const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+    const signature = crypto.createHmac('sha256', secret).update(body).digest('hex');
+
+    res.json({ ticket: `${body}.${signature}` });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Only Admin can access the following routes
 router.use(checkRole(['admin']));
 
 /**
