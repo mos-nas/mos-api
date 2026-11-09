@@ -85,6 +85,7 @@ class NotificationsService {
       await webpushService.init();
 
       for (const notification of newNotifications) {
+        if (notification.priority === 'info') continue;
         const title = notification.title || 'MOS';
         const body = notification.message || '';
         const priority = notification.priority || 'normal';
