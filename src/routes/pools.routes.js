@@ -332,37 +332,37 @@ router.get('/', authenticateToken, async (req, res) => {
 
 
 /**
-  * @swagger
-  * /pools/availablepooltypes:
-  *   get:
-  *     summary: Get available pool types
-  *     description: Retrieve a simple array of available pool types.
-  *     tags: [Pools]
-  *     security:
-  *       - bearerAuth: []
-  *     responses:
-  *       200:
-  *         description: Available pool types retrieved successfully
-  *         content:
-  *           application/json:
-  *             schema:
-  *               type: array
-  *               items:
-  *                 type: string
-  *               example: ["single", "multi", "mergerfs", "nonraid", "bcachefs"]
-  *       401:
-  *         description: Not authenticated
-  *         content:
-  *           application/json:
-  *             schema:
-  *               $ref: '#/components/schemas/Error'
-  *       500:
-  *         description: Error getting available filesystems
-  *         content:
-  *           application/json:
-  *             schema:
-  *               $ref: '#/components/schemas/Error'
-  */
+ * @swagger
+ * /pools/availablepooltypes:
+ *   get:
+ *     summary: Get available pool types
+ *     description: Retrieve a simple array of available pool types.
+ *     tags: [Pools]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Available pool types retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: string
+ *               example: ["single", "multi", "mergerfs", "nonraid", "bcachefs"]
+ *       401:
+ *         description: Not authenticated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Error getting available filesystems
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
 
 // Get available pool types
 router.get('/availablepooltypes', async (req, res) => {

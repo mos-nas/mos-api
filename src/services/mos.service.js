@@ -1,5 +1,6 @@
 const fs = require('fs').promises;
 const path = require('path');
+const net = require('net');
 const { exec } = require('child_process');
 const util = require('util');
 const execPromise = util.promisify(exec);
@@ -11,6 +12,9 @@ const systemService = require('./system.service');
 const swapService = require('./swap.service');
 const { SUPPORTER_PUBLIC_KEY } = require('../config/supporter');
 const llmModule = require('../routes/llm.routes');
+
+const AUTO_UPDATE_CANCEL_FILE = '/var/mos/auto_update_canceled';
+const MOS_NOTIFY_SOCKET = '/var/run/mos-notify.sock';
 
 class MosService {
   constructor() {
@@ -41,6 +45,10 @@ class MosService {
     // Supporter badge - validated key result, cached in memory
     this._supporterCache = false;
     this._supporterPubKeyObj = null;
+
+    // Auto update cancel flag - backed by runtime file /var/mos/auto_update_canceled,
+    // survives API restarts, cleared on system reboot (var/mos lives on rootfs)
+    this._autoUpdateCanceled = require('fs').existsSync(AUTO_UPDATE_CANCEL_FILE);
   }
 
   /**
@@ -4280,11 +4288,83 @@ class MosService {
       update_check: {
         enabled: false,
         update_check_schedule: '15 9 * * *',
-        webui_notification: false
+        webui_notification: true,
+        auto_update: {
+          enabled: false,
+          auto_update_schedule: '0 5 * * SAT',
+          update_kernel: true
+        }
+      },
+      update: {
+        update_kernel: true,
+        update_plugins: true
       },
       logsize: 200,
       supporter_key: ''
     };
+  }
+
+  /**
+   * Parses a restricted auto update cron schedule.
+   * Only "minute hour * * *" (daily) or "minute hour * * DOW" (weekly on one weekday) are accepted.
+   * @param {string} schedule - The cron schedule to parse
+   * @returns {Object|null} Parsed { minute, hour, dow } or null if invalid
+   */
+  _parseAutoUpdateSchedule(schedule) {
+    const match = (typeof schedule === 'string' ? schedule.trim() : '').match(
+      /^(\d{1,2}) (\d{1,2}) \* \* (\*|SUN|MON|TUE|WED|THU|FRI|SAT|[0-6])$/i
+    );
+    if (!match) return null;
+    const minute = parseInt(match[1], 10);
+    const hour = parseInt(match[2], 10);
+    if (minute > 59 || hour > 23) return null;
+    let dow = null;
+    if (match[3] !== '*') {
+      dow = parseInt(match[3], 10);
+      if (isNaN(dow)) {
+        const dayMap = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+        dow = dayMap[match[3].toLowerCase()];
+      }
+    }
+    return { minute, hour, dow };
+  }
+
+  /**
+   * Calculates the next occurrence of an auto update cron schedule
+   * @param {string} schedule - The cron schedule to evaluate
+   * @returns {string|null} Next execution as "YYYY-MM-DD HH:MM" (system local time) or null
+   */
+  _nextAutoUpdateTime(schedule) {
+    const parsed = this._parseAutoUpdateSchedule(schedule);
+    if (!parsed) return null;
+    const now = new Date();
+    for (let day = 0; day <= 7; day++) {
+      const d = new Date(now.getFullYear(), now.getMonth(), now.getDate() + day, parsed.hour, parsed.minute, 0);
+      if (d <= now) continue;
+      if (parsed.dow !== null && d.getDay() !== parsed.dow) continue;
+      const p = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    }
+    return null;
+  }
+
+  /**
+   * Sets the auto update cancel flag, backed by the runtime file /var/mos/auto_update_canceled.
+   * Survives API restarts, cleared on system reboot (var/mos lives on rootfs).
+   * Read live via GET /mos/settings/system and /mos/services, checked by the auto update cron job.
+   * @param {boolean} state - true cancels/skips auto updates, false resumes the schedule
+   * @returns {Promise<Object>} { canceled: boolean }
+   */
+  async setAutoUpdateCanceled(state) {
+    this._autoUpdateCanceled = state === true;
+    if (this._autoUpdateCanceled) {
+      await fs.writeFile(AUTO_UPDATE_CANCEL_FILE, new Date().toISOString(), 'utf8');
+    } else {
+      await fs.unlink(AUTO_UPDATE_CANCEL_FILE).catch(error => {
+        if (error.code !== 'ENOENT') throw error;
+      });
+    }
+    return { canceled: this._autoUpdateCanceled };
   }
 
   // Swapfile management is handled by swap.service.js
@@ -4305,6 +4385,8 @@ class MosService {
       } catch (error) {
         if (error.code === 'ENOENT') {
           console.warn('system.json not found, returning defaults');
+          if (defaults.update_check && defaults.update_check.auto_update)
+            defaults.update_check.auto_update.canceled = this._autoUpdateCanceled;
           return defaults;
         }
         throw error;
@@ -4312,6 +4394,11 @@ class MosService {
 
       // Merge loaded settings with defaults (loaded settings take precedence)
       const settings = this._deepMerge(defaults, loadedSettings);
+
+      // Inject runtime cancel flag (not persisted in system.json)
+      if (settings.update_check && settings.update_check.auto_update) {
+        settings.update_check.auto_update.canceled = this._autoUpdateCanceled;
+      }
 
       return settings;
     } catch (error) {
@@ -4342,7 +4429,7 @@ class MosService {
         if (error.code !== 'ENOENT') throw error;
       }
       // Only allowed fields are updated
-      const allowed = ['hostname', 'global_spindown', 'keymap', 'timezone', 'display', 'persist_history', 'persist_notifications', 'ntp', 'notification_sound', 'cpufreq', 'swapfile', 'binfmt', 'webui', 'update_check', 'logsize', 'supporter_key'];
+      const allowed = ['hostname', 'global_spindown', 'keymap', 'timezone', 'display', 'persist_history', 'persist_notifications', 'ntp', 'notification_sound', 'cpufreq', 'swapfile', 'binfmt', 'webui', 'update_check', 'update', 'logsize', 'supporter_key'];
       let supporterKeyChanged = false;
       let ntpChanged = false;
       let swapfileUpdate = null;
@@ -4612,6 +4699,49 @@ class MosService {
               current.update_check.update_check_schedule = updates.update_check.update_check_schedule;
             if (updates.update_check.webui_notification !== undefined)
               current.update_check.webui_notification = updates.update_check.webui_notification;
+
+            if (updates.update_check.auto_update && typeof updates.update_check.auto_update === 'object') {
+              if (!current.update_check.auto_update) current.update_check.auto_update = {};
+
+              if (updates.update_check.auto_update.enabled !== undefined &&
+                  current.update_check.auto_update.enabled !== updates.update_check.auto_update.enabled) {
+                updateCheckChanged = true;
+              }
+
+              if (updates.update_check.auto_update.auto_update_schedule !== undefined &&
+                  updates.update_check.auto_update.auto_update_schedule !== current.update_check.auto_update.auto_update_schedule) {
+                if (!this._parseAutoUpdateSchedule(updates.update_check.auto_update.auto_update_schedule)) {
+                  throw new Error('Invalid auto_update_schedule. Use "minute hour * * *" for daily or "minute hour * * DOW" for weekly, e.g. "30 4 * * *" or "0 5 * * SAT".');
+                }
+                updateCheckChanged = true;
+              }
+
+              if (updates.update_check.auto_update.enabled !== undefined)
+                current.update_check.auto_update.enabled = updates.update_check.auto_update.enabled;
+              if (updates.update_check.auto_update.auto_update_schedule !== undefined)
+                current.update_check.auto_update.auto_update_schedule = updates.update_check.auto_update.auto_update_schedule;
+              if (updates.update_check.auto_update.update_kernel !== undefined) {
+                if (typeof updates.update_check.auto_update.update_kernel !== 'boolean')
+                  throw new Error('Invalid update_kernel. Must be a boolean.');
+                current.update_check.auto_update.update_kernel = updates.update_check.auto_update.update_kernel;
+              }
+            }
+          }
+        } else if (key === 'update') {
+          // Update settings independent of auto_update, both fields default to true
+          if (!current.update) current.update = {};
+
+          if (updates.update && typeof updates.update === 'object') {
+            if (updates.update.update_kernel !== undefined) {
+              if (typeof updates.update.update_kernel !== 'boolean')
+                throw new Error('Invalid update_kernel. Must be a boolean.');
+              current.update.update_kernel = updates.update.update_kernel;
+            }
+            if (updates.update.update_plugins !== undefined) {
+              if (typeof updates.update.update_plugins !== 'boolean')
+                throw new Error('Invalid update_plugins. Must be a boolean.');
+              current.update.update_plugins = updates.update.update_plugins;
+            }
           }
         } else if (key === 'supporter_key') {
           const value = typeof updates[key] === 'string' ? updates[key].trim() : '';
@@ -5317,9 +5447,24 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
 
       // Check for OS update notification if webui_notification is enabled
       let osUpdateAvailable = null;
+      let securityNotice = null;
+      let autoUpdate = { enabled: false, canceled: false, schedule: '', update_kernel: true, next_scheduled: null };
       try {
         const sysSettings = await this.getSystemSettings();
-        if (sysSettings.update_check && sysSettings.update_check.webui_notification === true) {
+        const updateCheck = sysSettings.update_check || {};
+
+        if (updateCheck.auto_update) {
+          const au = updateCheck.auto_update;
+          autoUpdate = {
+            enabled: au.enabled === true,
+            canceled: au.canceled === true,
+            schedule: typeof au.auto_update_schedule === 'string' ? au.auto_update_schedule : '',
+            update_kernel: au.update_kernel !== false,
+            next_scheduled: au.enabled === true && au.canceled !== true ? this._nextAutoUpdateTime(au.auto_update_schedule) : null
+          };
+        }
+
+        if (updateCheck.webui_notification === true) {
           const updateCheckFile = '/var/mos/mos_update_check';
           try {
             const version = await fs.readFile(updateCheckFile, 'utf8');
@@ -5329,6 +5474,8 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
           } catch (e) {
             // File doesn't exist or can't be read - no update available
           }
+
+          securityNotice = await this._getSecurityNotice();
         }
       } catch (e) {
         // Settings read failed - skip update check
@@ -5370,7 +5517,7 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
         vm: { enabled: vmEnabled, running: vmRunning },
         hub: { enabled: hubEnabled },
         llm: llmStatus,
-        mos: { supporter: this.isSupporter(), os_update_available: osUpdateAvailable, reboot_pending: rebootPending },
+        mos: { supporter: this.isSupporter(), os_update_available: osUpdateAvailable, security_notice: securityNotice, auto_update: autoUpdate, reboot_pending: rebootPending },
         ...networkServices
       };
 
@@ -5396,6 +5543,23 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
     } catch (error) {
       throw new Error(`Fehler beim Abrufen des Service-Status: ${error.message}`);
     }
+  }
+
+  /**
+   * Reads the security notice URL from the mos.security_notice key of /var/mos/mos_update_check.json
+   * @returns {Promise<string|null>} Notice URL, null if the file is missing, invalid or the key is absent
+   * @private
+   */
+  async _getSecurityNotice() {
+    let data;
+    try {
+      data = JSON.parse(await fs.readFile('/var/mos/mos_update_check.json', 'utf8'));
+    } catch (e) {
+      return null;
+    }
+
+    const notice = data && typeof data === 'object' && data.mos ? data.mos.security_notice : null;
+    return typeof notice === 'string' && notice.trim() ? notice.trim() : null;
   }
 
   /**
@@ -5576,12 +5740,19 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
       const si = require('systeminformation');
       const cpu = await si.cpu();
 
-      // Get hostname from system.json
+      // Get hostname and update settings from system.json
       let hostname = null;
+      const updateSettings = { ...this._getDefaultSystemSettings().update };
       try {
         const systemData = await fs.readFile('/boot/config/system.json', 'utf8');
         const systemSettings = JSON.parse(systemData);
         hostname = systemSettings.hostname || null;
+        if (systemSettings.update && typeof systemSettings.update === 'object') {
+          if (typeof systemSettings.update.update_kernel === 'boolean')
+            updateSettings.update_kernel = systemSettings.update.update_kernel;
+          if (typeof systemSettings.update.update_plugins === 'boolean')
+            updateSettings.update_plugins = systemSettings.update.update_plugins;
+        }
       } catch (hostnameError) {
         console.warn('Warning: Could not read hostname from system.json:', hostnameError.message);
       }
@@ -5680,6 +5851,7 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
       // Combine release info with CPU info, hostname and uptime
       const osInfo = {
         hostname: hostname,
+        update: updateSettings,
         uptime: uptimeInfo,
         cpu: {
           manufacturer: cpu.manufacturer,
@@ -5814,6 +5986,91 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
         timestamp: new Date().toISOString()
       };
     }
+  }
+
+  /**
+   * Sends a notification via the mos-notify socket
+   * @private
+   */
+  _notify(title, message, priority = 'normal') {
+    return new Promise((resolve) => {
+      const client = net.createConnection(MOS_NOTIFY_SOCKET, () => {
+        client.write(JSON.stringify({ title, message, priority }));
+        client.end();
+        resolve(true);
+      });
+      client.on('error', () => resolve(false));
+    });
+  }
+
+  /**
+   * Executes the scheduled automatic MOS update. Self-contained for mos-api_cli:
+   * reads auto_update settings and cancel flag itself, notifies via mos-notify socket,
+   * runs the standard mos-os_update routine with "latest", then reboots after a 300s cooldown.
+   * @returns {Promise<Object>} { skipped, reason?, success?, version?, exitCode? }
+   */
+  async autoUpdateOS() {
+    const settings = await this.getSystemSettings();
+    const autoUpdate = settings.update_check && settings.update_check.auto_update;
+
+    if (!autoUpdate || autoUpdate.enabled !== true) {
+      return { skipped: true, reason: 'auto_update is not enabled' };
+    }
+
+    if (autoUpdate.canceled === true) {
+      return { skipped: true, reason: 'auto update is canceled' };
+    }
+
+    let channel = 'stable';
+    try {
+      const release = JSON.parse(await fs.readFile('/etc/mos-release.json', 'utf8'));
+      channel = release.mos.channel || 'stable';
+    } catch (error) {
+      console.warn('Auto update: could not read /etc/mos-release.json:', error.message);
+    }
+
+    let version = 'latest';
+    try {
+      version = (await fs.readFile('/var/mos/mos_update_check', 'utf8')).trim() || 'latest';
+    } catch (error) {
+      // No update check result available, update routine resolves latest itself
+    }
+
+    await this._notify('MOS Auto Update', `Auto update to MOS version ${version} starting`);
+
+    const updateKernel = autoUpdate.update_kernel !== false;
+    const result = await this.updateOS('latest', channel, updateKernel);
+    if (!result.success) {
+      await this._notify('MOS Auto Update', `Auto update to MOS version ${version} failed: ${result.error}`, 'alert');
+      return { skipped: false, success: false, version, error: result.error };
+    }
+
+    const exitCode = await result.done;
+    if (exitCode !== 0) {
+      await this._notify('MOS Auto Update', `Auto update to MOS version ${version} failed, mos-os_update exited with code ${exitCode}`, 'alert');
+      return { skipped: false, success: false, version, exitCode };
+    }
+
+    await this._notify('MOS Auto Update', 'Auto update finished, system will reboot in 5 minutes');
+    await new Promise(resolve => setTimeout(resolve, 300000));
+
+    // Re-check cancel flag after cooldown to allow canceling the pending reboot
+    try {
+      await fs.access(AUTO_UPDATE_CANCEL_FILE);
+      await this._notify('MOS Auto Update', 'Reboot after auto update canceled', 'info');
+      return { skipped: false, success: true, version, exitCode, rebootCanceled: true };
+    } catch (error) {
+      // Not canceled, proceed with reboot
+    }
+
+    try {
+      await execPromise('/sbin/reboot');
+    } catch (error) {
+      await this._notify('MOS Auto Update', `Auto update finished but reboot failed: ${error.message}`, 'alert');
+      return { skipped: false, success: false, version, exitCode, rebootError: error.message };
+    }
+
+    return { skipped: false, success: true, version, exitCode, rebooted: true };
   }
 
   /**

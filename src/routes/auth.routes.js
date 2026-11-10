@@ -1370,4 +1370,4 @@ router.put('/admin-tokens/:id/deactivate', authenticateToken, checkRole(['admin'
   }
 });
 
-module.exports = router; 
+module.exports = router;

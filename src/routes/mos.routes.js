@@ -476,130 +476,167 @@ const { checkRole } = require('../middleware/auth.middleware');
  *                   type: boolean
  *                   description: Enable remote mounting functionality (SMB/NFS shares)
  *                   example: true
-     *     SystemSettings:
-     *       type: object
-     *       properties:
-     *         hostname:
-     *           type: string
-     *           description: System hostname
-     *           example: "mos-server"
-     *         global_spindown:
-     *           type: boolean
-     *           description: Global disk spindown setting
-     *           example: true
-     *         timezone:
-     *           type: string
-     *           description: System timezone
-     *           example: "Europe/Berlin"
-     *         display:
-     *           type: object
-     *           description: Display settings
-     *           properties:
-     *             timeout:
-     *               type: integer
-     *               description: Display timeout in seconds
-     *               example: 30
-     *             powersave:
-     *               type: string
-     *               description: Display power save mode (on, vsync, powerdown, off)
-     *               example: "on"
-     *             powerdown:
-     *               type: integer
-     *               description: Display power down timeout in seconds
-     *               example: 60
-     *         persist_history:
-     *           type: boolean
-     *           description: Persist command history
-     *           example: false
-     *         notification_sound:
-     *           type: object
-     *           description: System notification sound settings
-     *           properties:
-     *             startup:
-     *               type: boolean
-     *               description: Enable sound notification on system startup
-     *               example: true
-     *             reboot:
-     *               type: boolean
-     *               description: Enable sound notification on system reboot
-     *               example: true
-     *             shutdown:
-     *               type: boolean
-     *               description: Enable sound notification on system shutdown
-     *               example: true
-     *         swapfile:
-     *           type: object
-     *           description: Swapfile configuration
-     *           properties:
-     *             enabled:
-     *               type: boolean
-     *               description: Enable swapfile
-     *               example: false
-     *             path:
-     *               type: string
-     *               nullable: true
-     *               description: Directory path for swapfile (must be on mounted pool under /mnt/)
-     *               example: "/mnt/pool1"
-     *             size:
-     *               type: string
-     *               description: Swapfile size (e.g., "10G", "1024M")
-     *               example: "10G"
-     *             priority:
-     *               type: integer
-     *               description: Swap priority (default -2)
-     *               example: -2
-     *             config:
-     *               type: object
-     *               description: Zswap configuration
-     *               properties:
-     *                 zswap:
-     *                   type: boolean
-     *                   description: Enable zswap (compressed swap cache)
-     *                   example: false
-     *                 shrinker:
-     *                   type: boolean
-     *                   description: Enable zswap shrinker
-     *                   example: true
-     *                 max_pool_percent:
-     *                   type: integer
-     *                   description: Maximum pool size as percentage of RAM
-     *                   example: 20
-     *                 compressor:
-     *                   type: string
-     *                   description: Compression algorithm (zstd, lz4, lzo, etc.)
-     *                   example: "zstd"
-     *                 accept_threshold_percent:
-     *                   type: integer
-     *                   description: Accept threshold percentage
-     *                   example: 90
-     *         webui:
-     *           type: object
-     *           description: WebUI configuration settings
-     *           properties:
-     *             ports:
-     *               type: object
-     *               description: WebUI port configuration
-     *               properties:
-     *                 http:
-     *                   type: integer
-     *                   description: HTTP port for the WebUI (default 80)
-     *                   example: 80
-     *         update_check:
-     *           type: object
-     *           description: MOS system update check configuration
-     *           properties:
-     *             enabled:
-     *               type: boolean
-     *               description: Enable system update checking
-     *               example: false
-     *             update_check_schedule:
-     *               type: string
-     *               description: Cron schedule for update checks
-     *               example: "0 1 * * *"
-     *         logsize:
-     *           type: integer
-     *           description: Size of the /var/log tmpfs in MB (default 200). Changing this remounts /var/log with the new size.
-     *           example: 200
+ *     SystemSettings:
+ *       type: object
+ *       properties:
+ *         hostname:
+ *           type: string
+ *           description: System hostname
+ *           example: "mos-server"
+ *         global_spindown:
+ *           type: boolean
+ *           description: Global disk spindown setting
+ *           example: true
+ *         timezone:
+ *           type: string
+ *           description: System timezone
+ *           example: "Europe/Berlin"
+ *         display:
+ *           type: object
+ *           description: Display settings
+ *           properties:
+ *             timeout:
+ *               type: integer
+ *               description: Display timeout in seconds
+ *               example: 30
+ *             powersave:
+ *               type: string
+ *               description: Display power save mode (on, vsync, powerdown, off)
+ *               example: "on"
+ *             powerdown:
+ *               type: integer
+ *               description: Display power down timeout in seconds
+ *               example: 60
+ *         persist_history:
+ *           type: boolean
+ *           description: Persist command history
+ *           example: false
+ *         notification_sound:
+ *           type: object
+ *           description: System notification sound settings
+ *           properties:
+ *             startup:
+ *               type: boolean
+ *               description: Enable sound notification on system startup
+ *               example: true
+ *             reboot:
+ *               type: boolean
+ *               description: Enable sound notification on system reboot
+ *               example: true
+ *             shutdown:
+ *               type: boolean
+ *               description: Enable sound notification on system shutdown
+ *               example: true
+ *         swapfile:
+ *           type: object
+ *           description: Swapfile configuration
+ *           properties:
+ *             enabled:
+ *               type: boolean
+ *               description: Enable swapfile
+ *               example: false
+ *             path:
+ *               type: string
+ *               nullable: true
+ *               description: Directory path for swapfile (must be on mounted pool under /mnt/)
+ *               example: "/mnt/pool1"
+ *             size:
+ *               type: string
+ *               description: Swapfile size (e.g., "10G", "1024M")
+ *               example: "10G"
+ *             priority:
+ *               type: integer
+ *               description: Swap priority (default -2)
+ *               example: -2
+ *             config:
+ *               type: object
+ *               description: Zswap configuration
+ *               properties:
+ *                 zswap:
+ *                   type: boolean
+ *                   description: Enable zswap (compressed swap cache)
+ *                   example: false
+ *                 shrinker:
+ *                   type: boolean
+ *                   description: Enable zswap shrinker
+ *                   example: true
+ *                 max_pool_percent:
+ *                   type: integer
+ *                   description: Maximum pool size as percentage of RAM
+ *                   example: 20
+ *                 compressor:
+ *                   type: string
+ *                   description: Compression algorithm (zstd, lz4, lzo, etc.)
+ *                   example: "zstd"
+ *                 accept_threshold_percent:
+ *                   type: integer
+ *                   description: Accept threshold percentage
+ *                   example: 90
+ *         webui:
+ *           type: object
+ *           description: WebUI configuration settings
+ *           properties:
+ *             ports:
+ *               type: object
+ *               description: WebUI port configuration
+ *               properties:
+ *                 http:
+ *                   type: integer
+ *                   description: HTTP port for the WebUI (default 80)
+ *                   example: 80
+ *         update_check:
+ *           type: object
+ *           description: MOS system update check configuration
+ *           properties:
+ *             enabled:
+ *               type: boolean
+ *               description: Enable system update checking
+ *               example: false
+ *             update_check_schedule:
+ *               type: string
+ *               description: Cron schedule for update checks
+ *               example: "0 1 * * *"
+ *             webui_notification:
+ *               type: boolean
+ *               description: Enable OS update notification in WebUI via /mos/services endpoint (defaults to true when not set in system.json)
+ *               example: true
+ *             auto_update:
+ *               type: object
+ *               description: Automatic MOS update configuration. Scheduling is handled by system crontab via mos-cron_update, the API does not run a background service
+ *               properties:
+ *                 enabled:
+ *                   type: boolean
+ *                   description: Enable automatic MOS update installation
+ *                   example: false
+ *                 auto_update_schedule:
+ *                   type: string
+ *                   description: Cron schedule restricted to daily "minute hour * * *" or weekly "minute hour * * DOW" (no day of month or month fields)
+ *                   example: "0 5 * * SAT"
+ *                 update_kernel:
+ *                   type: boolean
+ *                   description: Include kernel update when running the automatic MOS update (default true). Set false to update the OS rootfs only
+ *                   example: true
+ *                 canceled:
+ *                   type: boolean
+ *                   readOnly: true
+ *                   description: Runtime cancel flag backed by the file /var/mos/auto_update_canceled, never written to system.json. While true the scheduled auto update run is skipped and next_scheduled is null. Survives API restarts, cleared on system reboot (var/mos lives on rootfs). Set via POST /mos/settings/system/auto_update/cancel
+ *                   example: false
+ *         update:
+ *           type: object
+ *           description: MOS update behavior configuration, independent of update_check/auto_update. Both fields default to true when not set in system.json
+ *           properties:
+ *             update_kernel:
+ *               type: boolean
+ *               description: Include kernel update when updating MOS
+ *               example: true
+ *             update_plugins:
+ *               type: boolean
+ *               description: Include plugin updates when updating MOS
+ *               example: true
+ *         logsize:
+ *           type: integer
+ *           description: Size of the /var/log tmpfs in MB (default 200). Changing this remounts /var/log with the new size.
+ *           example: 200
  *     Keymap:
  *       type: object
  *       properties:
@@ -2327,6 +2364,9 @@ router.post('/settings/network/services/samba/config', checkRole(['admin']), asy
  *                 ports:
  *                   http: 80
  *                 listen_interfaces: ["eth0"]
+ *               update:
+ *                 update_kernel: true
+ *                 update_plugins: true
  *       401:
  *         description: Not authenticated
  *         content:
@@ -2628,8 +2668,36 @@ router.get('/settings/system', async (req, res) => {
  *                     example: "0 1 * * *"
  *                   webui_notification:
  *                     type: boolean
- *                     description: Enable OS update notification in WebUI via /mos/services endpoint
- *                     example: false
+ *                     description: Enable OS update notification in WebUI via /mos/services endpoint (defaults to true when not set in system.json)
+ *                     example: true
+ *                   auto_update:
+ *                     type: object
+ *                     description: Automatic MOS update configuration. Changing this triggers mos-cron_update which installs the crontab entry, the API itself runs no background service
+ *                     properties:
+ *                       enabled:
+ *                         type: boolean
+ *                         description: Enable automatic MOS update installation
+ *                         example: true
+ *                       auto_update_schedule:
+ *                         type: string
+ *                         description: Cron schedule restricted to daily "minute hour * * *" or weekly "minute hour * * DOW" (no day of month or month). Examples - daily at 04:30 "30 4 * * *", weekly on Saturday at 05:00 "0 5 * * SAT"
+ *                         example: "0 5 * * SAT"
+ *                       update_kernel:
+ *                         type: boolean
+ *                         description: Include kernel update when running the automatic MOS update (default true). Set false to update the OS rootfs only
+ *                         example: true
+ *               update:
+ *                 type: object
+ *                 description: MOS update behavior configuration, independent of update_check/auto_update. Only sent fields are updated
+ *                 properties:
+ *                   update_kernel:
+ *                     type: boolean
+ *                     description: Include kernel update when updating MOS (default true)
+ *                     example: true
+ *                   update_plugins:
+ *                     type: boolean
+ *                     description: Include plugin updates when updating MOS (default true)
+ *                     example: true
  *               logsize:
  *                 type: integer
  *                 description: Size of the /var/log tmpfs in MB (default 200). Changing this remounts /var/log with the new size.
@@ -2676,6 +2744,79 @@ router.post('/settings/system', async (req, res) => {
     }
     const updated = await mosService.updateSystemSettings(req.body);
     res.json(updated);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @swagger
+ * /mos/settings/system/auto_update/cancel:
+ *   post:
+ *     summary: Cancel or resume automatic MOS updates
+ *     description: Sets the auto update cancel flag (admin only). The flag is backed by the file /var/mos/auto_update_canceled and never written to system.json. It survives API restarts and is cleared on system reboot (var/mos lives on rootfs). While canceled, the scheduled auto update run (system crontab entry) is skipped and mos.auto_update.next_scheduled reports null. Use canceled false to resume the configured schedule without changing any auto_update settings.
+ *     tags: [MOS]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - canceled
+ *             properties:
+ *               canceled:
+ *                 type: boolean
+ *                 description: true skips auto updates, false resumes the configured schedule
+ *                 example: true
+ *     responses:
+ *       200:
+ *         description: Cancel state updated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 canceled:
+ *                   type: boolean
+ *                   description: Current cancel state
+ *                   example: true
+ *       400:
+ *         description: Invalid request body
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       401:
+ *         description: Not authenticated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       403:
+ *         description: Admin permission required
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Server error
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
+
+// POST: Cancel or resume auto update (flag backed by /var/mos/auto_update_canceled, cleared on reboot)
+router.post('/settings/system/auto_update/cancel', async (req, res) => {
+  try {
+    if (!req.body || typeof req.body.canceled !== 'boolean') {
+      return res.status(400).json({ error: 'Request body must contain canceled as boolean.' });
+    }
+    const state = await mosService.setAutoUpdateCanceled(req.body.canceled);
+    res.json(state);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -3616,21 +3757,21 @@ router.get('/certificates', async (req, res) => {
  *                       type: integer
  *                       description: Listen port for the Tailscale web UI
  *                       example: 8088
-  *                 netbird:
-  *                   type: object
-  *                   properties:
-  *                     enabled:
-  *                       type: boolean
-  *                       description: NetBird VPN service status
-  *                       example: false
-  *                 llm:
-  *                   type: object
-  *                   properties:
-  *                     enabled:
-  *                       type: boolean
-  *                       description: LLM container is connected (heartbeat active)
-  *                       example: true
-  *                 mos:
+ *                 netbird:
+ *                   type: object
+ *                   properties:
+ *                     enabled:
+ *                       type: boolean
+ *                       description: NetBird VPN service status
+ *                       example: false
+ *                 llm:
+ *                   type: object
+ *                   properties:
+ *                     enabled:
+ *                       type: boolean
+ *                       description: LLM container is connected (heartbeat active)
+ *                       example: true
+ *                 mos:
  *                   type: object
  *                   properties:
  *                     supporter:
@@ -3640,8 +3781,13 @@ router.get('/certificates', async (req, res) => {
  *                     os_update_available:
  *                       type: string
  *                       nullable: true
- *                       description: Version string from /var/mos/mos_update_check if webui_notification is enabled and an update is available, null otherwise
+ *                       description: Version string from /var/mos/mos_update_check if webui_notification is enabled and an update is available, null otherwise. If mos.auto_update.enabled and not canceled, this version is scheduled for automatic installation at mos.auto_update.next_scheduled
  *                       example: "0.6.1-stable"
+ *                     security_notice:
+ *                       type: string
+ *                       nullable: true
+ *                       description: Security notice URL from the mos.security_notice key of /var/mos/mos_update_check.json if webui_notification is enabled and the key holds a URL, null if the file is missing, not readable, invalid JSON or the key is absent or empty
+ *                       example: "https://mos-official.net/security"
  *                     reboot_pending:
  *                       type: object
  *                       description: Information about a pending system reboot
@@ -3659,6 +3805,31 @@ router.get('/certificates', async (req, res) => {
  *                             - "MOS Update 0.6.3-stable"
  *                             - "MOS Kernel Update 6.1.0-amd64"
  *                             - "Plugin Installation xyz"
+ *                     auto_update:
+ *                       type: object
+ *                       description: Automatic MOS update configuration (update_check.auto_update of the system settings)
+ *                       properties:
+ *                         enabled:
+ *                           type: boolean
+ *                           description: Whether automatic MOS update installation is enabled
+ *                           example: true
+ *                         canceled:
+ *                           type: boolean
+ *                           description: Runtime cancel flag backed by the file /var/mos/auto_update_canceled, while true the scheduled auto update run is skipped. Survives API restarts, cleared on system reboot
+ *                           example: false
+ *                         schedule:
+ *                           type: string
+ *                           description: Cron schedule of the automatic update, daily "minute hour * * *" or weekly "minute hour * * DOW"
+ *                           example: "0 5 * * SAT"
+ *                         update_kernel:
+ *                           type: boolean
+ *                           description: Whether the automatic update includes the kernel (default true)
+ *                           example: true
+ *                         next_scheduled:
+ *                           type: string
+ *                           nullable: true
+ *                           description: Next scheduled automatic update execution as "YYYY-MM-DD HH:MM" (system local time), null when disabled or canceled
+ *                           example: "2026-11-14 05:00"
  *               additionalProperties:
  *                 type: object
  *                 properties:
@@ -3694,13 +3865,20 @@ router.get('/certificates', async (req, res) => {
  *                   enabled: false
  *                   address: "0.0.0.0"
  *                   port: 8088
-  *               netbird:
-  *                 enabled: false
-  *               llm:
-  *                 enabled: true
-  *               mos:
+ *               netbird:
+ *                 enabled: false
+ *               llm:
+ *                 enabled: true
+ *               mos:
  *                 supporter: false
  *                 os_update_available: null
+ *                 security_notice: null
+ *                 auto_update:
+ *                   enabled: false
+ *                   canceled: false
+ *                   schedule: "0 5 * * SAT"
+ *                   update_kernel: true
+ *                   next_scheduled: null
  *                 reboot_pending:
  *                   pending: false
  *                   reason: []
@@ -4210,7 +4388,7 @@ router.get('/getreleases', async (req, res) => {
  * /mos/osinfo:
  *   get:
  *     summary: Get current MOS and CPU information
- *     description: Retrieve current OS release information from /etc/mos-release.json combined with CPU details and hostname (admin only)
+ *     description: Retrieve current OS release information from /etc/mos-release.json combined with CPU details, hostname and update settings (admin only)
  *     tags: [MOS]
  *     security:
  *       - bearerAuth: []
@@ -4228,6 +4406,18 @@ router.get('/getreleases', async (req, res) => {
  *                   nullable: true
  *                   description: System hostname from /boot/config/system.json
  *                   example: "mos-server"
+ *                 update:
+ *                   type: object
+ *                   description: MOS update behavior settings from the update object in system.json. Defaults to true for both fields when not set
+ *                   properties:
+ *                     update_kernel:
+ *                       type: boolean
+ *                       description: Include kernel update when updating MOS
+ *                       example: true
+ *                     update_plugins:
+ *                       type: boolean
+ *                       description: Include plugin updates when updating MOS
+ *                       example: true
  *                 cpu:
  *                   type: object
  *                   properties:
@@ -4287,6 +4477,9 @@ router.get('/getreleases', async (req, res) => {
  *                   example: "2025-08-24"
  *               example:
  *                 hostname: "mos-server"
+ *                 update:
+ *                   update_kernel: true
+ *                   update_plugins: true
  *                 cpu:
  *                   manufacturer: "Intel"
  *                   brand: "Intel(R) Core(TM) i7-12700K"

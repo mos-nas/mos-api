@@ -181,4 +181,4 @@ module.exports = {
   deriveAction,
   isActionAllowed,
   SENSITIVE_RESOURCES
-}; 
+};

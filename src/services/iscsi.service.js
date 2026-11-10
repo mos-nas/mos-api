@@ -1359,4 +1359,4 @@ class IscsiService {
   }
 }
 
-module.exports = new IscsiService(); 
+module.exports = new IscsiService();

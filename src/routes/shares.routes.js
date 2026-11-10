@@ -585,14 +585,14 @@ const isValidNfsAnonId = value =>
 router.get('/', checkRole(['admin']), async (req, res) => {
   try {
     const sharesArray = await sharesService.getShares();
-    
+
     // Transform array format to flat object {smb: [], nfs: []}
     const shares = { smb: [], nfs: [] };
     sharesArray.forEach(section => {
       if (section.smb) shares.smb = shares.smb.concat(section.smb);
       if (section.nfs) shares.nfs = shares.nfs.concat(section.nfs);
     });
-    
+
     res.json(shares);
   } catch (error) {
     res.status(500).json({
@@ -2507,4 +2507,4 @@ router.delete('/nfs/:shareId/target-devices', checkRole(['admin']), async (req, 
   }
 });
 
-module.exports = router; 
+module.exports = router;

@@ -1190,58 +1190,58 @@ router.put('/:device/description', checkRole(['admin']), async (req, res) => {
   }
 });
 
- /**
-  * @swagger
-  * /disks/availablefilesystems:
-  *   get:
-  *     summary: Get available filesystems
-  *     description: |
-  *       Retrieve a simple array of available filesystem names for formatting.
-  *       Use the pooltype parameter to filter filesystems based on pool type:
-  *       - **multi**: Returns only btrfs and zfs (if available) - these support multiple disks
-  *       - **nonraid**, **single**, **mergerfs** or no parameter: Returns all available filesystems
-  *     tags: [Disks]
-  *     security:
-  *       - bearerAuth: []
-  *     parameters:
-  *       - in: query
-  *         name: pooltype
-  *         schema:
-  *           type: string
-  *           enum: [multi, nonraid, single, mergerfs]
-  *         description: |
-  *           Filter filesystems by pool type.
-  *           'multi' returns only btrfs/zfs (multi-disk capable).
-  *           Other values or omitting returns all filesystems.
-  *     responses:
-  *       200:
-  *         description: Available filesystems retrieved successfully
-  *         content:
-  *           application/json:
-  *             schema:
-  *               type: array
-  *               items:
-  *                 type: string
-  *             examples:
-  *               all:
-  *                 summary: All filesystems (no filter or nonraid/single/mergerfs)
-  *                 value: ["ext4", "xfs", "btrfs", "zfs"]
-  *               multi:
-  *                 summary: Multi-disk filesystems only (pooltype=multi)
-  *                 value: ["btrfs", "zfs"]
-  *       401:
-  *         description: Not authenticated
-  *         content:
-  *           application/json:
-  *             schema:
-  *               $ref: '#/components/schemas/Error'
-  *       500:
-  *         description: Error getting available filesystems
-  *         content:
-  *           application/json:
-  *             schema:
-  *               $ref: '#/components/schemas/Error'
-  */
+/**
+ * @swagger
+ * /disks/availablefilesystems:
+ *   get:
+ *     summary: Get available filesystems
+ *     description: |
+ *       Retrieve a simple array of available filesystem names for formatting.
+ *       Use the pooltype parameter to filter filesystems based on pool type:
+ *       - **multi**: Returns only btrfs and zfs (if available) - these support multiple disks
+ *       - **nonraid**, **single**, **mergerfs** or no parameter: Returns all available filesystems
+ *     tags: [Disks]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: pooltype
+ *         schema:
+ *           type: string
+ *           enum: [multi, nonraid, single, mergerfs]
+ *         description: |
+ *           Filter filesystems by pool type.
+ *           'multi' returns only btrfs/zfs (multi-disk capable).
+ *           Other values or omitting returns all filesystems.
+ *     responses:
+ *       200:
+ *         description: Available filesystems retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: string
+ *             examples:
+ *               all:
+ *                 summary: All filesystems (no filter or nonraid/single/mergerfs)
+ *                 value: ["ext4", "xfs", "btrfs", "zfs"]
+ *               multi:
+ *                 summary: Multi-disk filesystems only (pooltype=multi)
+ *                 value: ["btrfs", "zfs"]
+ *       401:
+ *         description: Not authenticated
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Error getting available filesystems
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ */
 
 // Get available filesystems
 router.get('/availablefilesystems', async (req, res) => {
