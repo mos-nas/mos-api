@@ -1422,6 +1422,7 @@ class MosService {
   /**
    * Writes new values to the docker.json. Only the passed fields are updated.
    * If enabled is changed, the Docker service is stopped/started.
+   * If the service fails to start, enabled is reset to false and the error returned.
    * @param {Object} updates - The fields to update
    * @returns {Promise<Object>} The updated settings
    */
@@ -1576,7 +1577,17 @@ class MosService {
       if (current.enabled === true) {
         try {
           await execPromise('/usr/local/bin/mos-start docker');
+          if (!await this._waitForDockerReady()) {
+            throw new Error('dockerd did not come up or dropped again - check data-root and docker_options');
+          }
         } catch (error) {
+          try {
+            await execPromise('/etc/init.d/docker stop');
+          } catch (rollbackError) {
+            // Service could already be stopped
+          }
+          current.enabled = false;
+          await fs.writeFile(this.settingsPath, JSON.stringify(current, null, 2), 'utf8');
           throw new Error(`Error starting docker service: ${error.message}`);
         }
       } else if (await this._isDockerRunning()) {
@@ -5326,6 +5337,22 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
     } catch (error) {
       return false;
     }
+  }
+
+  /**
+   * Polls the Docker socket until the daemon answers, then reconfirms it stays up
+   * @param {number} timeoutMs - Maximum time to wait for the daemon
+   * @returns {Promise<boolean>} True if the daemon is up and stays up
+   */
+  async _waitForDockerReady(timeoutMs = 8000) {
+    const deadline = Date.now() + timeoutMs;
+    do {
+      if (await this._isDockerRunning()) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        return await this._isDockerRunning();
+      }
+    } while (Date.now() < deadline);
+    return false;
   }
 
   /**
