@@ -1392,11 +1392,11 @@ class DockerWebSocketManager extends EventEmitter {
         stream: 'stdout'
       });
 
-      // Stop current stack with streaming from working directory, keep images
+      // Stop current stack with streaming from working directory, keep images and volumes
       await this.executeCommandWithStream(
         operationId,
         'docker-compose',
-        ['-f', 'compose.yaml', '-f', 'mos.override.yaml', 'down', '-v'],
+        ['-f', 'compose.yaml', '-f', 'mos.override.yaml', 'down'],
         'compose-update-down',
         params,
         { cwd: workingPath }
@@ -1530,7 +1530,7 @@ class DockerWebSocketManager extends EventEmitter {
         await this.executeCommandWithStream(
           operationId,
           'docker-compose',
-          ['-f', 'compose.yaml', '-f', 'mos.override.yaml', 'up', '-d'],
+          ['-f', 'compose.yaml', '-f', 'mos.override.yaml', 'up', '-d', '--remove-orphans'],
           'compose-update-up',
           params,
           { cwd: workingPath }
@@ -1552,6 +1552,15 @@ class DockerWebSocketManager extends EventEmitter {
           output: `Stack files are preserved - fix the issue and update again.\n`,
           stream: 'stderr'
         });
+      }
+
+      // Remove old images after successful deployment
+      if (!deploymentFailed) {
+        this.sendUpdate(null, operationId, 'running', {
+          output: `\nRemoving old images...\n`,
+          stream: 'stdout'
+        });
+        await this.dockerComposeService._pruneDanglingImages();
       }
 
       // Get new container names REGARDLESS of deployment success

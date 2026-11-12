@@ -730,13 +730,25 @@ class DockerComposeService {
   async _deployStack(stackName) {
     try {
       const workingPath = await this._getWorkingPath(stackName);
-      const { stdout, stderr } = await execComposeWithAuth('docker-compose -f compose.yaml -f mos.override.yaml up -d', {
+      const { stdout, stderr } = await execComposeWithAuth('docker-compose -f compose.yaml -f mos.override.yaml up -d --remove-orphans', {
         cwd: workingPath
       });
       return { stdout: stdout || '', stderr: stderr || '' };
     } catch (error) {
       // Include output even on error
       throw new Error(`Failed to deploy stack: ${error.message}${error.stderr ? '\n' + error.stderr : ''}`);
+    }
+  }
+
+  /**
+   * Remove dangling (untagged) images left over after image pulls - best effort
+   * @returns {Promise<void>}
+   */
+  async _pruneDanglingImages() {
+    try {
+      await execPromise('docker image prune -f');
+    } catch (error) {
+      console.warn(`Warning during image prune: ${error.message}`);
     }
   }
 
@@ -761,9 +773,10 @@ class DockerComposeService {
    * Stop and remove a compose stack
    * @param {string} stackName - Stack name
    * @param {boolean} removeImages - Whether to remove images (default: true)
+   * @param {boolean} removeVolumes - Whether to remove named volumes (default: true, updates must pass false!)
    * @returns {Promise<Object>} Object with stdout and stderr
    */
-  async _removeStack(stackName, removeImages = true) {
+  async _removeStack(stackName, removeImages = true, removeVolumes = true) {
     try {
       const workingPath = await this._getWorkingPath(stackName);
 
@@ -791,9 +804,10 @@ class DockerComposeService {
 
       // Now use docker-compose down - it handles everything correctly
       // --rmi all removes all images used by this stack
-      // -v removes named volumes declared in the `volumes` section
+      // -v removes named volumes declared in the `volumes` section (only on explicit stack deletion!)
       const rmiFlag = removeImages ? ' --rmi all' : '';
-      const { stdout, stderr } = await execPromise(`docker-compose -f compose.yaml -f mos.override.yaml down${rmiFlag} -v`, {
+      const volumeFlag = removeVolumes ? ' -v' : '';
+      const { stdout, stderr } = await execPromise(`docker-compose -f compose.yaml -f mos.override.yaml down${rmiFlag}${volumeFlag}`, {
         cwd: workingPath
       });
 
@@ -1238,8 +1252,8 @@ class DockerComposeService {
         throw new Error('compose.yaml content is required');
       }
 
-      // Stop current stack (from working directory), keep images
-      const removeOutput = await this._removeStack(name, false);
+      // Stop current stack (from working directory), keep images and volumes
+      const removeOutput = await this._removeStack(name, false, false);
 
       // Step 1-2: Update files in boot directory
       await fs.writeFile(composePath, yamlContent);
@@ -1308,6 +1322,11 @@ class DockerComposeService {
 
         // Stop all containers to ensure a clean stopped state
         await this._stopStack(name);
+      }
+
+      // Remove old images after successful deployment
+      if (!deploymentError) {
+        await this._pruneDanglingImages();
       }
 
       // Get new container names REGARDLESS of deployment success (containers might be created but stopped)
