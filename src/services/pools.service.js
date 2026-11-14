@@ -811,11 +811,35 @@ class PoolsService {
     }
   }
 
+  // Normalize global_options: accept string or array, filter out options stored elsewhere
+  _normalizeGlobalOptions(value) {
+    if (!value) return null;
+    let options;
+    if (Array.isArray(value)) {
+      options = value;
+    } else if (typeof value === 'string' && value.trim()) {
+      options = value.split(',').map(s => s.trim()).filter(s => s);
+    } else {
+      return null;
+    }
+    // Filter out options that are stored separately or are mount defaults
+    return options.filter(o =>
+      !o.startsWith('minfreespace=') &&
+      !o.startsWith('moveonenospc=') &&
+      !o.startsWith('category.create=') &&
+      !o.startsWith('category.search=') &&
+      o !== 'defaults' &&
+      o !== 'allow_other' &&
+      o !== 'use_ino'
+    );
+  }
+
   // Construct mergerfs build options
   _buildMergerfsOptions(config) {
     const { global_options, policies, minfreespace, moveonenospc } = config || {};
-    const globalOptions = Array.isArray(global_options) && global_options.length > 0
-      ? global_options
+    const normalized = this._normalizeGlobalOptions(global_options);
+    const globalOptions = (normalized && normalized.length > 0)
+      ? normalized
       : ['cache.files=off', 'dropcacheonclose=true'];
     const options = [
       'defaults',
@@ -7398,6 +7422,14 @@ class PoolsService {
         spindownChangedDevices = this._applySpindownConfig(pool, configUpdates.spindown);
       }
 
+      // Normalize global_options if sent as a string
+      if (configUpdates.global_options !== undefined && typeof configUpdates.global_options === 'string') {
+        const normalized = this._normalizeGlobalOptions(configUpdates.global_options);
+        if (normalized) {
+          configUpdates.global_options = normalized;
+        }
+      }
+
       // Update config with provided values
       // Supports both direct properties and dot-notation (e.g., "sync.enabled")
       Object.keys(configUpdates).forEach(key => {
@@ -8734,6 +8766,9 @@ class PoolsService {
       const searchPolicy = options.policies?.search || 'ff';
 
       // Create pool configuration for MergerFS with provided policies
+      // Support mergerfsOptions string (from frontend) as well as global_options array
+      const rawGlobalOptions = options.global_options || options.mergerfsOptions;
+      const normalizedGlobalOptions = this._normalizeGlobalOptions(rawGlobalOptions);
       const mergerfsConfig = {
         policies: {
           create: createPolicy,
@@ -8741,7 +8776,7 @@ class PoolsService {
         },
         minfreespace: options.minfreespace || "20G",
         moveonenospc: options.moveonenospc !== undefined ? options.moveonenospc : true,
-        global_options: options.global_options || [
+        global_options: normalizedGlobalOptions || [
           "cache.files=off",
           "dropcacheonclose=true"
         ],
@@ -9259,6 +9294,8 @@ class PoolsService {
       const searchPolicy = options.policies?.search || 'ff';
 
       // Create pool configuration for NonRAID with provided policies
+      const rawGlobalOptions = options.global_options || options.mergerfsOptions;
+      const normalizedGlobalOptions = this._normalizeGlobalOptions(rawGlobalOptions);
       const nonraidConfig = {
         policies: {
           create: createPolicy,
@@ -9266,7 +9303,7 @@ class PoolsService {
         },
         minfreespace: options.minfreespace || "20G",
         moveonenospc: options.moveonenospc !== undefined ? options.moveonenospc : true,
-        global_options: options.global_options || [
+        global_options: normalizedGlobalOptions || [
           "cache.files=off",
           "dropcacheonclose=true"
         ],
