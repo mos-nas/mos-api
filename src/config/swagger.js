@@ -106,6 +106,10 @@ const options = {
         description: 'File Operations WebSocket'
       },
       {
+        name: 'Install To Disk WebSocket',
+        description: 'Real-time MOS installation to disk via WebSocket'
+      },
+      {
         name: 'MOS Hub',
         description: 'MOS Hub Repository Management'
       },

@@ -73,6 +73,7 @@ const vmWebSocketRoutes = require('./routes/websocket/vm.websocket.routes');
 const lxcWebSocketRoutes = require('./routes/websocket/lxc.websocket.routes');
 const nutWebSocketRoutes = require('./routes/websocket/nut.websocket.routes');
 const fileOperationsWebSocketRoutes = require('./routes/websocket/fileoperations.websocket.routes');
+const installToDiskWebSocketRoutes = require('./routes/websocket/installtodisk.websocket.routes');
 
 // Middleware
 const { authenticateToken } = require('./middleware/auth.middleware');
@@ -195,6 +196,7 @@ async function startServer() {
   app.use('/api/v1/lxc', lxcWebSocketRoutes);
   app.use('/api/v1/nut', nutWebSocketRoutes);
   app.use('/api/v1/mos', fileOperationsWebSocketRoutes);
+  app.use('/api/v1/mos', installToDiskWebSocketRoutes);
 
   // Error Handling
   app.use(errorHandler);
@@ -318,6 +320,7 @@ async function startServer() {
   const LxcWebSocketManager = require('./websockets/lxc.websocket');
   const NutWebSocketManager = require('./websockets/nut.websocket');
   const FileOperationsWebSocketManager = require('./websockets/fileoperations.websocket');
+  const InstallToDiskWebSocketManager = require('./websockets/installtodisk.websocket');
 
   // Initialize event emitter for service communication
   const EventEmitter = require('events');
@@ -333,6 +336,7 @@ async function startServer() {
   const lxcNamespace = io.of('/lxc');
   const nutNamespace = io.of('/nut');
   const fileOperationsNamespace = io.of('/fileoperations');
+  const installToDiskNamespace = io.of('/mos/installtodisk');
 
   // Initialize pool WebSocket manager with pools namespace
   const PoolsService = require('./services/pools.service');
@@ -403,6 +407,9 @@ async function startServer() {
   const fileOperationsService = require('./services/fileoperations.service');
   const fileOperationsWebSocketManager = new FileOperationsWebSocketManager(fileOperationsNamespace, fileOperationsService);
 
+  // Initialize Install To Disk WebSocket manager with mos/installtodisk namespace
+  const installToDiskWebSocketManager = new InstallToDiskWebSocketManager(installToDiskNamespace);
+
   // Make WebSocket managers available to routes
   app.locals.poolWebSocketManager = poolWebSocketManager;
   app.locals.systemLoadWebSocketManager = systemLoadWebSocketManager;
@@ -413,6 +420,7 @@ async function startServer() {
   app.locals.lxcWebSocketManager = lxcWebSocketManager;
   app.locals.nutWebSocketManager = nutWebSocketManager;
   app.locals.fileOperationsWebSocketManager = fileOperationsWebSocketManager;
+  app.locals.installToDiskWebSocketManager = installToDiskWebSocketManager;
 
   // Setup namespace handlers
   poolsNamespace.on('connection', (socket) => {
@@ -465,6 +473,12 @@ async function startServer() {
   fileOperationsNamespace.on('connection', (socket) => {
     console.info(`FileOps WebSocket client connected: ${socket.id}`);
     fileOperationsWebSocketManager.handleConnection(socket);
+  });
+
+  // MOS Install To Disk namespace for streamed mos-install execution
+  installToDiskNamespace.on('connection', (socket) => {
+    console.info(`InstallToDisk WebSocket client connected: ${socket.id}`);
+    installToDiskWebSocketManager.handleConnection(socket);
   });
 
   // ============================================================
