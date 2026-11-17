@@ -27,7 +27,8 @@ const { authenticateToken } = require('../../middleware/auth.middleware');
  *       working directory `/var/mos`. It keeps running after client disconnects and can be
  *       re-attached via `installtodisk-get-operations` (including buffered output replay,
  *       last 100 KiB per operation). Cancel kills the entire process group (SIGTERM, then
- *       SIGKILL after 5 seconds). Only one installation can run at a time.
+ *       SIGKILL after 5 seconds) and unmounts the installer mount points afterwards. Only
+ *       one installation can run at a time.
  *
  *       **Events to emit (client → server):**
  *
@@ -148,7 +149,7 @@ router.get('/installtodisk/websocket/events', (req, res) => {
       working_directory: '/var/mos',
       single_flight: 'Only one installation can run at a time',
       persistence: 'Installation survives client disconnects and API restarts (detached process group)',
-      cancel: 'SIGTERM to process group, SIGKILL after 5 seconds',
+      cancel: 'SIGTERM to process group, SIGKILL after 5 seconds, installer mount points unmounted afterwards',
       output_buffer: 'Last 100 KiB of output kept per operation for rejoining clients'
     }
   });

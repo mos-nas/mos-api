@@ -269,6 +269,10 @@ class InstallToDiskWebSocketManager {
         duration: operation.completedAt - startTime
       });
 
+      if (operation.cancelled) {
+        this._umountInstallerMounts();
+      }
+
       console.log(`InstallToDisk operation ${operationId} ${operation.status} (exit=${code}, signal=${signal})`);
     });
 
@@ -299,6 +303,8 @@ class InstallToDiskWebSocketManager {
         try {
           process.kill(-operation.pid, 'SIGKILL');
         } catch {}
+        // Second unmount pass once the whole group is guaranteed dead
+        this._umountInstallerMounts();
       }, KILL_ESCALATION_MS);
 
       this.sendUpdate(null, operationId, 'cancelling', { message: 'Cancellation requested' });
@@ -307,6 +313,16 @@ class InstallToDiskWebSocketManager {
       operation.cancelled = false;
       console.error('Error cancelling operation:', error);
       this.sendUpdate(null, operationId, 'error', { message: `Failed to cancel operation: ${error.message}` });
+    }
+  }
+
+  /**
+   * Unmount installer mount points after cancelled installations (mos-install leaves them mounted when killed)
+   */
+  _umountInstallerMounts() {
+    for (const mountPoint of ['/var/mos/installer/boot', '/var/mos/installer/esp']) {
+      const proc = spawn('umount', [mountPoint]);
+      proc.on('error', () => {});
     }
   }
 
