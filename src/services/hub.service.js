@@ -190,8 +190,12 @@ class HubService {
         }
         current.schedule = newSchedule;
       }
+      if (typeof settings.page_entries === 'string') {
+        const parsed = Number(settings.page_entries.replace(',', '.').trim());
+        if (Number.isFinite(parsed)) settings.page_entries = parsed;
+      }
       if (typeof settings.page_entries === 'number' && settings.page_entries > 0) {
-        current.page_entries = settings.page_entries;
+        current.page_entries = Math.trunc(settings.page_entries);
       }
 
       let updateCronChanged = false;
@@ -257,15 +261,19 @@ class HubService {
   }
 
   /**
-   * Gets the hub enabled status for /mos/services
-   * @returns {Promise<boolean>} Hub enabled status
+   * Gets the hub status for /mos/services
+   * @returns {Promise<Object>} Hub status (enabled, page_entries)
    */
-  async getHubEnabledStatus() {
+  async getHubStatus() {
     try {
       const config = await this._readConfig();
-      return config.enabled === true;
+      const pageEntries = Math.trunc(Number(config.page_entries));
+      return {
+        enabled: config.enabled === true,
+        page_entries: pageEntries > 0 ? pageEntries : this._getDefaultConfig().page_entries
+      };
     } catch {
-      return false;
+      return { enabled: false, page_entries: this._getDefaultConfig().page_entries };
     }
   }
 

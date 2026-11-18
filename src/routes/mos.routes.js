@@ -3681,6 +3681,17 @@ router.get('/certificates', async (req, res) => {
  *                       type: boolean
  *                       description: libvirt daemon is actually running (PID check)
  *                       example: true
+ *                 hub:
+ *                   type: object
+ *                   properties:
+ *                     enabled:
+ *                       type: boolean
+ *                       description: Hub service enabled in config
+ *                       example: false
+ *                     page_entries:
+ *                       type: integer
+ *                       description: Number of hub index entries per page (defaults to 24)
+ *                       example: 24
  *                 ssh:
  *                   type: object
  *                   properties:
@@ -3788,6 +3799,10 @@ router.get('/certificates', async (req, res) => {
  *                       nullable: true
  *                       description: Security notice URL from the mos.security_notice key of /var/mos/mos_update_check.json if webui_notification is enabled and the key holds a URL, null if the file is missing, not readable, invalid JSON or the key is absent or empty
  *                       example: "https://mos-official.net/security"
+ *                     update_check:
+ *                       type: boolean
+ *                       description: Whether periodic MOS update checks are enabled (update_check.enabled of the system settings, defaults to false when not set)
+ *                       example: false
  *                     reboot_pending:
  *                       type: object
  *                       description: Information about a pending system reboot
@@ -3845,6 +3860,9 @@ router.get('/certificates', async (req, res) => {
  *               vm:
  *                 enabled: true
  *                 running: true
+ *               hub:
+ *                 enabled: false
+ *                 page_entries: 24
  *               ssh:
  *                 enabled: true
  *               samba:
@@ -3873,6 +3891,7 @@ router.get('/certificates', async (req, res) => {
  *                 supporter: false
  *                 os_update_available: null
  *                 security_notice: null
+ *                 update_check: false
  *                 auto_update:
  *                   enabled: false
  *                   canceled: false

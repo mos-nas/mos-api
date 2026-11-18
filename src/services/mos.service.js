@@ -5461,11 +5461,11 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
   async getAllServiceStatus() {
     try {
       // Execute all status reads in parallel for maximum performance
-      const [dockerEnabled, lxcEnabled, vmEnabled, hubEnabled, networkServices, dockerRunning, vmRunning, llmStatus] = await Promise.all([
+      const [dockerEnabled, lxcEnabled, vmEnabled, hubStatus, networkServices, dockerRunning, vmRunning, llmStatus] = await Promise.all([
         this._getDockerEnabledStatus(),
         this._getLxcEnabledStatus(),
         this._getVmEnabledStatus(),
-        hubService.getHubEnabledStatus(),
+        hubService.getHubStatus(),
         this._getNetworkServicesStatus(),
         this._isDockerRunning(),
         this._isLibvirtRunning(),
@@ -5475,10 +5475,13 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
       // Check for OS update notification if webui_notification is enabled
       let osUpdateAvailable = null;
       let securityNotice = null;
+      let updateCheckEnabled = false;
       let autoUpdate = { enabled: false, canceled: false, schedule: '', update_kernel: true, next_scheduled: null };
       try {
         const sysSettings = await this.getSystemSettings();
         const updateCheck = sysSettings.update_check || {};
+
+        updateCheckEnabled = updateCheck.enabled === true;
 
         if (updateCheck.auto_update) {
           const au = updateCheck.auto_update;
@@ -5542,9 +5545,9 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
         docker: { enabled: dockerEnabled, running: dockerRunning },
         lxc: { enabled: lxcEnabled },
         vm: { enabled: vmEnabled, running: vmRunning },
-        hub: { enabled: hubEnabled },
+        hub: hubStatus,
         llm: llmStatus,
-        mos: { supporter: this.isSupporter(), os_update_available: osUpdateAvailable, security_notice: securityNotice, auto_update: autoUpdate, reboot_pending: rebootPending },
+        mos: { supporter: this.isSupporter(), os_update_available: osUpdateAvailable, security_notice: securityNotice, update_check: updateCheckEnabled, auto_update: autoUpdate, reboot_pending: rebootPending },
         ...networkServices
       };
 
@@ -5902,9 +5905,10 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
    * @param {string} version - Version (latest or version number like 0.0.0, 1.223.1)
    * @param {string} channel - Update channel (alpha, beta, stable)
    * @param {boolean} updateKernel - Optional, whether to update the kernel (default: true)
+   * @param {boolean} auto - Optional, marks the update as auto update trigger for the script notifications (default: false)
    * @returns {Promise<Object>} Update status
    */
-  async updateOS(version, channel, updateKernel = true) {
+  async updateOS(version, channel, updateKernel = true, auto = false) {
     try {
       // Parameter validation
       if (!version || typeof version !== 'string') {
@@ -5921,13 +5925,10 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
         throw new Error('Version must be "latest" or start with a version number (e.g., 0.0.0, 1.223.1, 0.0.0-alpha.1)');
       }
 
-      // Command arguments
+      // Command arguments - fixed positions: $3 update_kernel or empty, $4 auto or empty
       const args = [version, channel];
-
-      // Add third argument only if updateKernel is true
-      if (updateKernel === true) {
-        args.push('update_kernel');
-      }
+      args.push(updateKernel === true ? 'update_kernel' : '');
+      args.push(auto === true ? 'auto' : '');
 
       // Create a detached child process that executes the update immediately
       const { spawn } = require('child_process');
@@ -6066,7 +6067,7 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
     await this._notify('MOS Auto Update', `Auto update to MOS version ${version} starting`);
 
     const updateKernel = autoUpdate.update_kernel !== false;
-    const result = await this.updateOS('latest', channel, updateKernel);
+    const result = await this.updateOS('latest', channel, updateKernel, true);
     if (!result.success) {
       await this._notify('MOS Auto Update', `Auto update to MOS version ${version} failed: ${result.error}`, 'alert');
       return { skipped: false, success: false, version, error: result.error };
@@ -6084,11 +6085,14 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
     // Re-check cancel flag after cooldown to allow canceling the pending reboot
     try {
       await fs.access(AUTO_UPDATE_CANCEL_FILE);
-      await this._notify('MOS Auto Update', 'Reboot after auto update canceled', 'info');
+      await this._notify('MOS Auto Update', `Reboot after auto update to MOS version ${version} canceled, update is installed and reboot must be performed manually`, 'info');
       return { skipped: false, success: true, version, exitCode, rebootCanceled: true };
     } catch (error) {
       // Not canceled, proceed with reboot
     }
+
+    await this._notify('MOS Auto Update', `Rebooting to MOS version ${version} now`);
+    await new Promise(resolve => setTimeout(resolve, 5000));
 
     try {
       await execPromise('/sbin/reboot');
