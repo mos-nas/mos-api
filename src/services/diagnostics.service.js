@@ -97,6 +97,7 @@ const collectors = [
   { type: 'command', command: 'dmidecode -qt 17 2>/dev/null', target: 'system/memory.txt' },
   { type: 'command', command: 'testparm -s 2>/dev/null', target: 'samba/testparm.txt' },
   { type: 'command', command: 'df -h 2>/dev/null', target: 'system/df.txt' },
+  { type: 'command', command: 'lsblk -f 2>/dev/null', target: 'system/lsblk.txt' },
   { type: 'command', command: 'crontab -l 2>/dev/null', target: 'system/cron.txt' },
   { type: 'command', command: 'ls -lA /sys/class/drm/*/device/driver 2>/dev/null', target: 'system/dri.txt' },
   { type: 'command', command: 'ls -lA /sys/class/dvb/*/device/driver 2>/dev/null', target: 'system/dvb.txt' },

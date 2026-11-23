@@ -91,9 +91,11 @@ class PoolsService {
     if (!PoolsService._udevMonitorStarted) {
       PoolsService._udevMonitor = null;
       PoolsService._udevAlertedDevices = new Set();
-      PoolsService._udevDeviceMap = new Map(); // uuid/id -> { device, poolName }
+      PoolsService._udevDeviceMap = new Map(); // base disk -> { poolName, poolId, snapraid }
       PoolsService._udevRestartCount = 0;
       PoolsService._udevMaxRestarts = 5;
+      PoolsService._udevRestartTimer = null;
+      PoolsService._udevStartedAt = 0;
       PoolsService._btrfsMonitorsInitialized = false;
 
       // Kill orphans from previous runs (sync: must complete before spawn)
@@ -137,14 +139,18 @@ class PoolsService {
    * @private
    */
   _startUdevDiskMonitor() {
+    if (PoolsService._udevMonitor) return;
+
     try {
-      PoolsService._udevMonitor = spawn('udevadm', [
+      const proc = spawn('udevadm', [
         'monitor', '--kernel', '--subsystem-match=block', '--property'
       ], { stdio: ['ignore', 'pipe', 'ignore'] });
+      PoolsService._udevMonitor = proc;
+      PoolsService._udevStartedAt = Date.now();
 
       let buffer = '';
 
-      PoolsService._udevMonitor.stdout.on('data', (data) => {
+      proc.stdout.on('data', (data) => {
         buffer += data.toString();
 
         // udev events are separated by blank lines
@@ -157,36 +163,53 @@ class PoolsService {
         }
       });
 
-      PoolsService._udevMonitor.on('error', (err) => {
+      // A failed spawn emits error but no exit, so both handlers must restart
+      proc.on('error', (err) => {
         console.warn(`[PoolsService] udev monitor failed to start: ${err.message}`);
-        PoolsService._udevMonitor = null;
+        this._scheduleUdevRestart(proc);
       });
 
-      PoolsService._udevMonitor.on('exit', (code) => {
-        // Don't restart if we stopped it intentionally (null = intentional stop)
-        if (!PoolsService._udevMonitor) return;
-        PoolsService._udevMonitor = null;
-
-        // Respect restart limit to prevent crash loops
-        PoolsService._udevRestartCount++;
-        if (PoolsService._udevRestartCount > PoolsService._udevMaxRestarts) {
-          console.error(`[PoolsService] udev monitor exceeded max restarts (${PoolsService._udevMaxRestarts}), giving up`);
-          return;
-        }
-
-        console.warn(`[PoolsService] udev monitor exited (code ${code}), restarting in 5s... (${PoolsService._udevRestartCount}/${PoolsService._udevMaxRestarts})`);
-        setTimeout(() => this._startUdevDiskMonitor(), 5000);
+      proc.on('exit', (code) => {
+        this._scheduleUdevRestart(proc, code);
       });
-
-      // Reset restart counter on successful start (process stays alive > 10s)
-      setTimeout(() => {
-        if (PoolsService._udevMonitor) {
-          PoolsService._udevRestartCount = 0;
-        }
-      }, 10000);
     } catch (err) {
       console.warn(`[PoolsService] Could not start udev monitor: ${err.message}`);
     }
+  }
+
+  /**
+   * Schedule the restart of a dead udev monitor in rounds of _udevMaxRestarts,
+   * a round ends with a 5min backoff. A monitor that stayed alive longer than the
+   * crash window opens a new round instead of burning through the current one.
+   * @param {Object} proc - The monitor process the event belongs to
+   * @param {number} [code] - Exit code, absent when the spawn itself failed
+   * @private
+   */
+  _scheduleUdevRestart(proc, code) {
+    // Events of an already replaced or intentionally stopped monitor are ignored
+    if (PoolsService._udevMonitor !== proc) return;
+    PoolsService._udevMonitor = null;
+
+    const reason = code === undefined ? 'failed to start' : `exited (code ${code})`;
+    if (code !== undefined && Date.now() - PoolsService._udevStartedAt > 10000) {
+      PoolsService._udevRestartCount = 0;
+    }
+    PoolsService._udevRestartCount++;
+
+    let delay;
+    if (PoolsService._udevRestartCount > PoolsService._udevMaxRestarts) {
+      PoolsService._udevRestartCount = 0;
+      delay = 300000;
+      console.warn(`[PoolsService] udev monitor ${reason}, restarting in 5min after ${PoolsService._udevMaxRestarts} restarts`);
+    } else {
+      delay = 5000;
+      console.warn(`[PoolsService] udev monitor ${reason}, restarting in 5s... (${PoolsService._udevRestartCount}/${PoolsService._udevMaxRestarts})`);
+    }
+
+    PoolsService._udevRestartTimer = setTimeout(() => {
+      PoolsService._udevRestartTimer = null;
+      this._startUdevDiskMonitor();
+    }, delay);
   }
 
   /**
@@ -194,6 +217,11 @@ class PoolsService {
    * @private
    */
   _stopUdevDiskMonitor() {
+    if (PoolsService._udevRestartTimer) {
+      clearTimeout(PoolsService._udevRestartTimer);
+      PoolsService._udevRestartTimer = null;
+    }
+
     if (PoolsService._udevMonitor) {
       const proc = PoolsService._udevMonitor;
       PoolsService._udevMonitor = null; // prevent restart in exit handler
@@ -230,35 +258,68 @@ class PoolsService {
   }
 
   /**
-   * Refresh the UUID/ID → device path map for all pools.
+   * Read NAME/UUID/PARTUUID of every block device.
+   * lsblk reads the udev database and does not wake disks from standby.
+   * @returns {Promise<Array<{name: string, uuid: string, partuuid: string}>>}
+   * @private
+   */
+  async _getDeviceUuidRows() {
+    const { stdout } = await execPromise('lsblk -Ppno NAME,UUID,PARTUUID');
+    return stdout.split('\n').reduce((rows, line) => {
+      const [, name, uuid, partuuid] = line.match(/^NAME="([^"]*)" UUID="([^"]*)" PARTUUID="([^"]*)"/) || [];
+      if (name) rows.push({ name, uuid, partuuid });
+      return rows;
+    }, []);
+  }
+
+  /**
+   * Refresh the base disk -> pool map for all pools.
    * Called on startup and after mount/unmount so we always have a current
    * mapping even if the device symlink disappears before we can read it.
+   * Members are matched by UUID or PARTUUID: multi device pools share one
+   * filesystem UUID, so a by-uuid symlink only ever covers a single member.
+   * ZFS pools are skipped, they are plugin managed and not monitored here.
    * @private
    */
   async _refreshUdevDeviceMap() {
     try {
-      const pools = await this._readPools();
-      const map = new Map();
+      const byIdPools = [];
+      const memberIds = new Map(); // device id or partuuid -> pool
+      const pools = (await this._readPools())
+        .filter(pool => pool.type !== 'zfs' && !pool.external);
 
       for (const pool of pools) {
-        const allDevices = [
-          ...(pool.data_devices || []).map(d => ({ ...d, _isParity: false })),
-          ...(pool.parity_devices || []).map(d => ({ ...d, _isParity: true }))
-        ];
+        const entry = {
+          poolName: pool.name,
+          poolId: pool.id,
+          snapraid: pool.type === 'mergerfs' && (pool.parity_devices || []).length > 0
+        };
+        if (pool.type === 'nonraid') byIdPools.push({ pool, entry });
 
-        for (const dev of allDevices) {
-          if (!dev.id) continue;
-
-          let resolvedPath = null;
-          if (pool.type === 'nonraid' && dev._isParity) {
-            resolvedPath = await this.getRealDevicePathFromId(dev.id);
-          } else {
-            resolvedPath = await this.getRealDevicePathFromUuid(dev.id);
+        for (const device of [...(pool.data_devices || []), ...(pool.parity_devices || [])]) {
+          for (const id of [device.id, device.partuuid]) {
+            if (id) memberIds.set(id, entry);
           }
+        }
+      }
 
-          if (resolvedPath) {
-            map.set(dev.id, { device: resolvedPath, poolName: pool.name, poolId: pool.id });
-          }
+      const map = new Map(); // base disk -> pool
+      if (memberIds.size > 0) {
+        for (const { name, uuid, partuuid } of await this._getDeviceUuidRows()) {
+          // nmd/md and mapper rows report the filesystem, not the physical member
+          if (/^\/dev\/(nmd|mapper\/|dm-)/.test(name)) continue;
+
+          const pool = memberIds.get(uuid) || memberIds.get(partuuid);
+          if (pool) map.set(this._getBaseDiskFromPartition(name), pool);
+        }
+      }
+
+      // NonRAID parity is identified by /dev/disk/by-id, which lsblk does not report
+      for (const { pool, entry } of byIdPools) {
+        for (const parity of pool.parity_devices || []) {
+          if (!parity.id) continue;
+          const device = await this.getRealDevicePathFromId(parity.id);
+          if (device) map.set(this._getBaseDiskFromPartition(device), entry);
         }
       }
 
@@ -271,33 +332,20 @@ class PoolsService {
   /**
    * Check if a removed device belongs to any mounted pool and send alert.
    * Uses the pre-built device map so UUID symlinks don't need to be live.
-   * @param {string} removedDevice - The device path that was removed (e.g. /dev/sdj1)
+   * @param {string} removedDevice - The device path that was removed (e.g. /dev/sdj)
    * @private
    */
   async _checkRemovedDeviceAgainstPools(removedDevice) {
     // Dedup: don't send multiple alerts for the same device
     if (PoolsService._udevAlertedDevices.has(removedDevice)) return;
 
-    // Also derive the base disk (e.g. /dev/sdj from /dev/sdj1)
-    const baseDisk = this._getBaseDiskFromPartition(removedDevice);
-
-    // Search the cached device map for a match
-    let matchedPoolName = null;
-
-    for (const [, entry] of PoolsService._udevDeviceMap) {
-      const cachedBase = this._getBaseDiskFromPartition(entry.device);
-      if (entry.device === removedDevice || entry.device === baseDisk ||
-          cachedBase === baseDisk) {
-        matchedPoolName = entry.poolName;
-        break;
-      }
-    }
-
-    if (!matchedPoolName) return;
+    // udev reports whole disks only, the map is keyed by base disk as well
+    const matchedPool = PoolsService._udevDeviceMap.get(this._getBaseDiskFromPartition(removedDevice));
+    if (!matchedPool) return;
 
     // Only alert if pool is currently mounted
     try {
-      const mountPoint = path.join(this.mountBasePath, matchedPoolName);
+      const mountPoint = path.join(this.mountBasePath, matchedPool.poolName);
       const isMounted = await this._isMounted(mountPoint);
       if (!isMounted) return;
     } catch {
@@ -307,12 +355,65 @@ class PoolsService {
     // Mark as alerted and send notification
     PoolsService._udevAlertedDevices.add(removedDevice);
 
-    console.warn(`[PoolsService] Disk ${removedDevice} from Pool ${matchedPoolName} went offline!`);
+    console.warn(`[PoolsService] Disk ${removedDevice} from Pool ${matchedPool.poolName} went offline!`);
     sendNotification(
       'Pool',
-      `Disk ${removedDevice} from Pool ${matchedPoolName} went offline`,
+      `Disk ${removedDevice} from Pool ${matchedPool.poolName} went offline`,
       'alert'
     ).catch(err => console.warn(`[PoolsService] Failed to send disk offline notification: ${err.message}`));
+
+    // A SnapRAID pool keeps working without one member and would write on without parity cover
+    if (matchedPool.snapraid) {
+      await this._freezeSnapraidPool(matchedPool.poolId)
+        .catch(err => console.warn(`[PoolsService] Read-only guard failed for Pool ${matchedPool.poolName}: ${err.message}`));
+    }
+  }
+
+  /**
+   * Freeze a SnapRAID pool after one of its members went offline and notify about the result.
+   * The content files sit on the data mounts and on the parity mounts, so an operation that
+   * keeps running rewrites them as if the missing disk was deleted and destroys the fix. The
+   * running operation is stopped and every member mount is set read-only, mergerfs itself
+   * cannot be remounted because it is FUSE. Write access returns once the pool is unmounted
+   * and mounted again, which is also what a device replacement does.
+   * @param {string} poolId - Pool id
+   * @private
+   */
+  async _freezeSnapraidPool(poolId) {
+    const pool = (await this._readPools()).find(p => p.id === poolId);
+    if (!pool) return;
+
+    if (await fs.access(`/run/snapraid/${pool.name}.socket`).then(() => true).catch(() => false)) {
+      console.warn(`[PoolsService] Stopping SnapRAID operation of Pool ${pool.name}`);
+      await this.executeSnapRAIDOperation(pool.id, 'force_stop')
+        .catch(err => console.warn(`[PoolsService] SnapRAID force_stop failed for Pool ${pool.name}: ${err.message}`));
+    }
+
+    const mounts = [
+      ...(pool.data_devices || []).map(d => path.join(this.mergerfsBasePath, pool.name, `disk${d.slot}`)),
+      ...(pool.parity_devices || []).map(d => path.join(this.snapraidBasePath, pool.name, `parity${d.slot}`))
+    ];
+    const { stdout } = await execPromise('findmnt -n -o TARGET');
+    const targets = new Set(stdout.trim().split('\n'));
+    const liveMounts = mounts.filter(mount => targets.has(mount));
+    if (liveMounts.length === 0) return;
+
+    let readOnly = 0;
+    for (const mount of liveMounts) {
+      try {
+        // a failing disk can block the flush of the remount, the alert must not wait for it
+        await execPromise(`mount -o remount,ro "${mount}"`, { timeout: 15000 });
+        readOnly++;
+      } catch (error) {
+        console.warn(`[PoolsService] Read-only remount of ${mount} failed: ${error.message}`);
+      }
+    }
+
+    const outcome = readOnly === liveMounts.length
+      ? `Pool ${pool.name} was set read-only after the disk loss. Unmount and mount the pool to write again.`
+      : `Pool ${pool.name} could only be set read-only on ${readOnly}/${liveMounts.length} mounts, open files block the rest. Unmount the pool to protect the parity.`;
+    sendNotification('Pool', outcome, 'alert')
+      .catch(err => console.warn(`[PoolsService] Failed to send read-only notification: ${err.message}`));
   }
 
   /**
@@ -3831,12 +3932,9 @@ class PoolsService {
       disks.add(PoolHelpers.getBaseDiskFromPartition(device));
     };
 
-    // lsblk reads the udev database and does not wake disks from standby
     const ids = new Set(pool.data_devices.map(d => d.partuuid || d.id));
-    const { stdout } = await execPromise('lsblk -Ppno NAME,UUID,PARTUUID');
-    for (const line of stdout.split('\n')) {
-      const [, name, uuid, partuuid] = line.match(/^NAME="([^"]*)" UUID="([^"]*)" PARTUUID="([^"]*)"/) || [];
-      if (name && !/^\/dev\/(nmd|mapper\/|dm-)/.test(name) && (ids.has(uuid) || ids.has(partuuid))) {
+    for (const { name, uuid, partuuid } of await this._getDeviceUuidRows()) {
+      if (!/^\/dev\/(nmd|mapper\/|dm-)/.test(name) && (ids.has(uuid) || ids.has(partuuid))) {
         add(name);
       }
     }
@@ -9495,11 +9593,9 @@ class PoolsService {
     }
     const isParity = name => parityDisks.has(name) || parityDisks.has(PoolHelpers.getBaseDiskFromPartition(name));
 
-    const { stdout } = await execPromise('lsblk -Ppno NAME,UUID,PARTUUID');
     const candidates = [];
-    for (const line of stdout.split('\n')) {
-      const [, name, uuid, partuuid] = line.match(/^NAME="([^"]*)" UUID="([^"]*)" PARTUUID="([^"]*)"/) || [];
-      if (!name || /^\/dev\/(nmd|mapper\/|dm-)/.test(name) || isParity(name)) continue;
+    for (const { name, uuid, partuuid } of await this._getDeviceUuidRows()) {
+      if (/^\/dev\/(nmd|mapper\/|dm-)/.test(name) || isParity(name)) continue;
       if (uuid === device.id || partuuid === device.id) candidates.push(name);
     }
     if (candidates.length > 1) {

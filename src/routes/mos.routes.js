@@ -3792,7 +3792,7 @@ router.get('/certificates', async (req, res) => {
  *                     os_update_available:
  *                       type: string
  *                       nullable: true
- *                       description: Version string from /var/mos/mos_update_check if webui_notification is enabled and an update is available, null otherwise. If mos.auto_update.enabled and not canceled, this version is scheduled for automatic installation at mos.auto_update.next_scheduled
+ *                       description: Version string from /var/mos/mos_update_check if webui_notification is enabled and an update is available, null otherwise. If mos.auto_update.enabled, not canceled and an update is available, this version is scheduled for automatic installation at mos.auto_update.next_scheduled
  *                       example: "0.6.1-stable"
  *                     security_notice:
  *                       type: string
@@ -3843,7 +3843,7 @@ router.get('/certificates', async (req, res) => {
  *                         next_scheduled:
  *                           type: string
  *                           nullable: true
- *                           description: Next scheduled automatic update execution as "YYYY-MM-DD HH:MM" (system local time), null when disabled or canceled
+ *                           description: Next scheduled automatic update execution as "YYYY-MM-DD HH:MM" (system local time), null when disabled, canceled or no update is available. Only shown when an update is actually pending for automatic installation
  *                           example: "2026-11-14 05:00"
  *               additionalProperties:
  *                 type: object

@@ -5483,28 +5483,22 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
 
         updateCheckEnabled = updateCheck.enabled === true;
 
+        const availableUpdate = await this._getAvailableUpdate();
+
         if (updateCheck.auto_update) {
           const au = updateCheck.auto_update;
+          const willRun = au.enabled === true && au.canceled !== true && availableUpdate !== null;
           autoUpdate = {
             enabled: au.enabled === true,
             canceled: au.canceled === true,
             schedule: typeof au.auto_update_schedule === 'string' ? au.auto_update_schedule : '',
             update_kernel: au.update_kernel !== false,
-            next_scheduled: au.enabled === true && au.canceled !== true ? this._nextAutoUpdateTime(au.auto_update_schedule) : null
+            next_scheduled: willRun ? this._nextAutoUpdateTime(au.auto_update_schedule) : null
           };
         }
 
         if (updateCheck.webui_notification === true) {
-          const updateCheckFile = '/var/mos/mos_update_check';
-          try {
-            const version = await fs.readFile(updateCheckFile, 'utf8');
-            if (version && version.trim()) {
-              osUpdateAvailable = version.trim();
-            }
-          } catch (e) {
-            // File doesn't exist or can't be read - no update available
-          }
-
+          osUpdateAvailable = availableUpdate;
           securityNotice = await this._getSecurityNotice();
         }
       } catch (e) {
@@ -5572,6 +5566,22 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
       return result;
     } catch (error) {
       throw new Error(`Fehler beim Abrufen des Service-Status: ${error.message}`);
+    }
+  }
+
+  /**
+   * Reads the available MOS update version from /var/mos/mos_update_check.
+   * The update check routine writes this file only when a newer version is found,
+   * so its presence is the signal that an update is available.
+   * @returns {Promise<string|null>} Available version string, null when no update is available
+   * @private
+   */
+  async _getAvailableUpdate() {
+    try {
+      const version = await fs.readFile('/var/mos/mos_update_check', 'utf8');
+      return version && version.trim() ? version.trim() : null;
+    } catch (error) {
+      return null;
     }
   }
 
@@ -6033,8 +6043,9 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
 
   /**
    * Executes the scheduled automatic MOS update. Self-contained for mos-api_cli:
-   * reads auto_update settings and cancel flag itself, notifies via mos-notify socket,
-   * runs the standard mos-os_update routine with "latest", then reboots after a 300s cooldown.
+   * reads auto_update settings and cancel flag itself, skips silently when no newer
+   * version is available, otherwise notifies via mos-notify socket, runs the standard
+   * mos-os_update routine with the available version, then reboots after a 300s cooldown.
    * @returns {Promise<Object>} { skipped, reason?, success?, version?, exitCode? }
    */
   async autoUpdateOS() {
@@ -6049,6 +6060,11 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
       return { skipped: true, reason: 'auto update is canceled' };
     }
 
+    const version = await this._getAvailableUpdate();
+    if (!version) {
+      return { skipped: true, reason: 'no update available' };
+    }
+
     let channel = 'stable';
     try {
       const release = JSON.parse(await fs.readFile('/etc/mos-release.json', 'utf8'));
@@ -6057,17 +6073,10 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
       console.warn('Auto update: could not read /etc/mos-release.json:', error.message);
     }
 
-    let version = 'latest';
-    try {
-      version = (await fs.readFile('/var/mos/mos_update_check', 'utf8')).trim() || 'latest';
-    } catch (error) {
-      // No update check result available, update routine resolves latest itself
-    }
-
     await this._notify('MOS Auto Update', `Auto update to MOS version ${version} starting`);
 
     const updateKernel = autoUpdate.update_kernel !== false;
-    const result = await this.updateOS('latest', channel, updateKernel, true);
+    const result = await this.updateOS(version, channel, updateKernel, true);
     if (!result.success) {
       await this._notify('MOS Auto Update', `Auto update to MOS version ${version} failed: ${result.error}`, 'alert');
       return { skipped: false, success: false, version, error: result.error };
