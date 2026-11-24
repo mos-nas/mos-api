@@ -7631,6 +7631,13 @@ router.post('/upload', checkRole(['admin']), fileUpload({ useTempFiles: false })
  *       The operation runs asynchronously - use the WebSocket namespace `/fileoperations`
  *       or poll `GET /mos/fileoperations` for progress updates.
  *
+ *       **Multiple Sources:**
+ *       `source` accepts a single path (file or directory) or an array of paths.
+ *       Multiple sources run as one operation with one shared progress and can be
+ *       cancelled together via `DELETE /mos/fileoperations/{id}`.
+ *       The response and WebSocket payloads mirror the request shape: a string stays
+ *       a string, an array stays an array.
+ *
  *       **MergerFS Protection:**
  *       Copy operations within the same MergerFS pool are blocked to prevent data corruption.
  *       This includes paths under `/mnt/POOLNAME` and `/var/mergerfs/POOLNAME/`.
@@ -7663,8 +7670,14 @@ router.post('/upload', checkRole(['admin']), fileUpload({ useTempFiles: false })
  *                 description: Type of file operation
  *                 example: "copy"
  *               source:
- *                 type: string
- *                 description: Source file or directory path
+ *                 oneOf:
+ *                   - type: string
+ *                     description: Single source file or directory path
+ *                   - type: array
+ *                     items:
+ *                       type: string
+ *                     description: Array of source file/directory paths
+ *                 description: Source file or directory path, or an array of paths. All sources run as one operation with shared progress
  *                 example: "/mnt/Pool1/media/movies"
  *               destination:
  *                 type: string
@@ -7694,6 +7707,16 @@ router.post('/upload', checkRole(['admin']), fileUpload({ useTempFiles: false })
  *                 operation: "move"
  *                 source: "/var/mergerfs/Pool1/disk1/old-data"
  *                 destination: "/var/mergerfs/Pool1/disk2"
+ *             copyMultiple:
+ *               summary: Copy multiple files and directories in one operation
+ *               value:
+ *                 operation: "copy"
+ *                 source:
+ *                   - "/mnt/Pool1/media/movies"
+ *                   - "/mnt/Pool1/media/tv"
+ *                   - "/mnt/Pool1/file.txt"
+ *                 destination: "/mnt/ssd1/backup"
+ *                 onConflict: "fail"
  *             overwrite:
  *               summary: Copy with overwrite
  *               value:

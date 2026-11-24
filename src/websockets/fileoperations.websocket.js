@@ -290,9 +290,9 @@ class FileOperationsWebSocketManager {
       const rawOp = {
         id: op.id,
         operation: op.operation,
-        source: op.source,
+        source: op.sourceIsArray ? [...op.sources] : op.sources[0],
         destination: op.destination,
-        destinationFull: op.destinationFull,
+        destinationFull: op.sourceIsArray ? [...op.destinationsFull] : op.destinationsFull[0],
         status: op.status,
         instantMove: op.instantMove,
         onConflict: op.onConflict,

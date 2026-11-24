@@ -23,16 +23,28 @@ const { authenticateToken } = require('../../middleware/auth.middleware');
  *           description: Type of file operation
  *           example: "copy"
  *         source:
- *           type: string
- *           description: Source path
+ *           oneOf:
+ *             - type: string
+ *               description: Single source path
+ *             - type: array
+ *               items:
+ *                 type: string
+ *               description: Multiple source paths
+ *           description: Source path(s) - mirrors the request shape (string stays string, array stays array)
  *           example: "/mnt/Pool1/media/movies"
  *         destination:
  *           type: string
  *           description: Destination directory path
  *           example: "/mnt/ssd1/backup"
  *         destinationFull:
- *           type: string
- *           description: Full destination path including source basename
+ *           oneOf:
+ *             - type: string
+ *               description: Full destination path including source basename
+ *             - type: array
+ *               items:
+ *                 type: string
+ *               description: Full destination path per source, same order as source
+ *           description: Full destination path(s) including source basename(s)
  *           example: "/mnt/ssd1/backup/movies"
  *         status:
  *           type: string

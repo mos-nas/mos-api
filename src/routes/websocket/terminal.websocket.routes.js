@@ -257,7 +257,7 @@ const router = express.Router();
 
 /**
  * @swagger
- * /api/v1/terminal/websocket/events:
+ * /terminal/websocket/events:
  *   get:
  *     summary: Terminal WebSocket Events Documentation
  *     description: |
@@ -266,8 +266,8 @@ const router = express.Router();
  *       ## Connection
  *       Connect to the Terminal WebSocket namespace:
  *       ```javascript
- *       const socket = io('http://localhost:3000/api/v1/terminal', {
- *         path: '/socket.io/',
+ *       const socket = io('http://localhost:3000/terminal', {
+ *         path: '/api/v1/socket.io/',
  *         auth: {
  *           token: 'your-jwt-token'
  *         }
@@ -377,9 +377,9 @@ router.get('/websocket/events', (req, res) => {
   }
 
   const events = {
-    namespace: '/api/v1/terminal',
-    connectionUrl: `${req.protocol}://${req.get('host')}/api/v1/terminal`,
-    socketPath: '/socket.io/',
+    namespace: '/terminal',
+    connectionUrl: `${req.protocol}://${req.get('host')}/terminal`,
+    socketPath: '/api/v1/socket.io/',
     authentication: 'JWT token required for all operations',
     adminOnly: true,
     clientEvents: {
@@ -459,7 +459,7 @@ router.get('/websocket/events', (req, res) => {
 
 /**
  * @swagger
- * /api/v1/terminal/websocket/stats:
+ * /terminal/websocket/stats:
  *   get:
  *     summary: Get Terminal WebSocket Statistics
  *     description: |

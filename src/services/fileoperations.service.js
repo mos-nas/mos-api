@@ -26,7 +26,7 @@ class FileOperationsService extends EventEmitter {
    * Start a file operation (copy or move)
    * @param {Object} params - Operation parameters
    * @param {string} params.operation - "copy" or "move"
-   * @param {string} params.source - Source path
+   * @param {string|string[]} params.source - Source file/directory path or array of paths
    * @param {string} params.destination - Destination directory path
    * @param {string} params.onConflict - "fail", "overwrite", or "skip" (default: "fail")
    * @param {Object} user - User object with byte_format preference
@@ -43,22 +43,30 @@ class FileOperationsService extends EventEmitter {
       throw new Error('Invalid onConflict. Must be "fail", "overwrite", or "skip"');
     }
 
-    if (!source || !destination) {
+    if (!source || (Array.isArray(source) && source.length === 0) || !destination) {
       throw new Error('Source and destination are required');
     }
 
-    // Normalize paths
-    const normalizedSource = path.resolve(source);
+    // Normalize sources, remember input shape to mirror it in responses
+    const sourceIsArray = Array.isArray(source);
+    const sources = (sourceIsArray ? source : [source]).map(s => {
+      if (typeof s !== 'string' || !s.trim()) {
+        throw new Error('Invalid source. Must be a path or an array of paths');
+      }
+      return path.resolve(s);
+    });
     const normalizedDest = path.resolve(destination);
 
-    // Check source exists
-    try {
-      await fs.stat(normalizedSource);
-    } catch (e) {
-      if (e.code === 'ENOENT') {
-        throw new Error(`Source does not exist: ${normalizedSource}`);
+    // Check sources exist
+    for (const src of sources) {
+      try {
+        await fs.stat(src);
+      } catch (e) {
+        if (e.code === 'ENOENT') {
+          throw new Error(`Source does not exist: ${src}`);
+        }
+        throw e;
       }
-      throw e;
     }
 
     // Check destination exists and is a directory
@@ -74,18 +82,22 @@ class FileOperationsService extends EventEmitter {
       throw e;
     }
 
-    // MergerFS validation
-    await this._validateMergerfsRules(operation, normalizedSource, normalizedDest);
+    // MergerFS validation (each source against destination)
+    for (const src of sources) {
+      await this._validateMergerfsRules(operation, src, normalizedDest);
+    }
 
     // Check for conflicts (fail mode)
-    const destPath = path.join(normalizedDest, path.basename(normalizedSource));
+    const destinationsFull = sources.map(s => path.join(normalizedDest, path.basename(s)));
     if (onConflict === 'fail') {
-      try {
-        await fs.access(destPath);
-        throw new Error(`Destination already exists: ${destPath}. Use onConflict "overwrite" or "skip" to proceed`);
-      } catch (e) {
-        if (e.code !== 'ENOENT') throw e;
-        // ENOENT = doesn't exist = good
+      for (const destPath of destinationsFull) {
+        try {
+          await fs.access(destPath);
+          throw new Error(`Destination already exists: ${destPath}. Use onConflict "overwrite" or "skip" to proceed`);
+        } catch (e) {
+          if (e.code !== 'ENOENT') throw e;
+          // ENOENT = doesn't exist = good
+        }
       }
     }
 
@@ -96,9 +108,10 @@ class FileOperationsService extends EventEmitter {
     const op = {
       id,
       operation,
-      source: normalizedSource,
+      sources,
+      sourceIsArray,
       destination: normalizedDest,
-      destinationFull: destPath,
+      destinationsFull,
       status: 'preparing',
       instantMove: false,
       onConflict,
@@ -133,18 +146,25 @@ class FileOperationsService extends EventEmitter {
    */
   async _executeOperation(op, user) {
     // For move operations, try instant move first (same filesystem)
+    let pendingSources = op.sources;
     if (op.operation === 'move') {
-      try {
-        await fs.rename(op.source, op.destinationFull);
+      pendingSources = [];
+      for (let i = 0; i < op.sources.length; i++) {
+        try {
+          await fs.rename(op.sources[i], op.destinationsFull[i]);
+        } catch (e) {
+          if (e.code !== 'EXDEV') throw e;
+          // Cross-device move → fall through to rsync for this source
+          pendingSources.push(op.sources[i]);
+        }
+      }
+      if (pendingSources.length === 0) {
         op.instantMove = true;
         op.status = 'completed';
         op.progress = 100;
         op.completedAt = new Date().toISOString();
         this._emitUpdate(op.id);
         return;
-      } catch (e) {
-        if (e.code !== 'EXDEV') throw e;
-        // Cross-device move → fall through to rsync
       }
     }
 
@@ -153,8 +173,11 @@ class FileOperationsService extends EventEmitter {
     this._emitUpdate(op.id);
 
     try {
-      const { stdout } = await execPromise(`du -sb "${op.source}"`);
-      op.bytesTotal = parseInt(stdout.split('\t')[0], 10) || 0;
+      const quoted = pendingSources.map(s => `"${s}"`).join(' ');
+      const { stdout } = await execPromise(`du -sb ${quoted}`);
+      op.bytesTotal = stdout
+        .split('\n')
+        .reduce((sum, line) => sum + (parseInt(line.split('\t')[0], 10) || 0), 0);
     } catch (e) {
       console.warn(`[FileOps] Failed to calculate source size for ${op.id}: ${e.message}`);
     }
@@ -181,14 +204,14 @@ class FileOperationsService extends EventEmitter {
     op.status = 'running';
     this._emitUpdate(op.id);
 
-    await this._runRsync(op, user);
+    await this._runRsync(op, user, pendingSources);
   }
 
   /**
    * Run rsync with progress tracking
    * @private
    */
-  _runRsync(op, user) {
+  _runRsync(op, user, sources) {
     return new Promise((resolve, reject) => {
       const args = [
         '-a',
@@ -206,8 +229,10 @@ class FileOperationsService extends EventEmitter {
         args.push('--ignore-existing');
       }
 
-      // Source path (no trailing slash = copy the directory itself)
-      args.push(op.source);
+      // Source paths (no trailing slash = copy the directory itself)
+      for (const src of sources) {
+        args.push(src);
+      }
       // Destination directory (trailing slash = put into this directory)
       args.push(op.destination + '/');
 
@@ -247,7 +272,9 @@ class FileOperationsService extends EventEmitter {
 
           // For move: clean up empty source directories left by --remove-source-files
           if (op.operation === 'move') {
-            this._cleanupEmptyDirs(op.source).catch(() => {});
+            for (const src of op.sources) {
+              this._cleanupEmptyDirs(src).catch(() => {});
+            }
           }
 
           resolve();
@@ -497,6 +524,14 @@ class FileOperationsService extends EventEmitter {
   // ============================================================
 
   /**
+   * Mirror the request shape for output fields (string stays string, array stays array)
+   * @private
+   */
+  _mirrorShape(op, values) {
+    return op.sourceIsArray ? [...values] : values[0];
+  }
+
+  /**
    * Sanitize operation for API output (remove internal fields, add _human fields)
    * @private
    */
@@ -506,9 +541,9 @@ class FileOperationsService extends EventEmitter {
     return {
       id: op.id,
       operation: op.operation,
-      source: op.source,
+      source: this._mirrorShape(op, op.sources),
       destination: op.destination,
-      destinationFull: op.destinationFull,
+      destinationFull: this._mirrorShape(op, op.destinationsFull),
       status: op.status,
       instantMove: op.instantMove,
       onConflict: op.onConflict,
@@ -537,9 +572,9 @@ class FileOperationsService extends EventEmitter {
       this.emit('operation-update', operationId, {
         id: op.id,
         operation: op.operation,
-        source: op.source,
+        source: this._mirrorShape(op, op.sources),
         destination: op.destination,
-        destinationFull: op.destinationFull,
+        destinationFull: this._mirrorShape(op, op.destinationsFull),
         status: op.status,
         instantMove: op.instantMove,
         onConflict: op.onConflict,
