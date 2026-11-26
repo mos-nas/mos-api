@@ -6210,12 +6210,19 @@ router.post('/createfolder', checkRole(['admin']), async (req, res) => {
  * @swagger
  * /mos/delete:
  *   post:
- *     summary: Delete a file or folder from the filesystem
+ *     summary: Delete files or folders from the filesystem
  *     description: |
- *       Delete a file or folder with optional force and recursive flags.
+ *       Delete one or more files or folders with optional force and recursive flags.
+ *       - `path` accepts a single path (file or folder) or an array of paths
+ *       - All paths are validated upfront, nothing is deleted if validation fails
  *       - For files: deletes the file directly
  *       - For empty folders: deletes without recursive flag
  *       - For non-empty folders: requires recursive=true
+ *       - The response mirrors the request shape: a string stays a string,
+ *         an array stays an array (in the `path` and `type` fields)
+ *       - If validation fails for array paths, the error message lists all
+ *         affected paths with a short reason, e.g.
+ *         `Cannot delete 2 of 3 paths: /a (does not exist); /b (directory is not empty, use recursive: true)`
  *     tags: [MOS]
  *     security:
  *       - bearerAuth: []
@@ -6229,8 +6236,14 @@ router.post('/createfolder', checkRole(['admin']), async (req, res) => {
  *               - path
  *             properties:
  *               path:
- *                 type: string
- *                 description: Absolute path to the file or folder to delete
+ *                 oneOf:
+ *                   - type: string
+ *                     description: Absolute path to the file or folder to delete
+ *                   - type: array
+ *                     items:
+ *                       type: string
+ *                     description: Array of absolute paths to delete
+ *                 description: Absolute path to the file or folder, or an array of paths
  *                 example: "/mnt/pool1/oldfile.txt"
  *               force:
  *                 type: boolean
@@ -6242,9 +6255,25 @@ router.post('/createfolder', checkRole(['admin']), async (req, res) => {
  *                 description: Recursively delete directories (required for non-empty folders)
  *                 example: false
  *                 default: false
+ *           examples:
+ *             single:
+ *               summary: Delete a single file
+ *               value:
+ *                 path: "/mnt/pool1/oldfile.txt"
+ *                 force: true
+ *                 recursive: false
+ *             multiple:
+ *               summary: Delete multiple files and folders in one request
+ *               value:
+ *                 path:
+ *                   - "/mnt/pool1/oldfile.txt"
+ *                   - "/mnt/pool1/old-folder"
+ *                   - "/mnt/pool1/logs/tmp"
+ *                 force: true
+ *                 recursive: true
  *     responses:
  *       200:
- *         description: Item deleted successfully
+ *         description: Item(s) deleted successfully
  *         content:
  *           application/json:
  *             schema:
@@ -6257,12 +6286,24 @@ router.post('/createfolder', checkRole(['admin']), async (req, res) => {
  *                   type: string
  *                   example: "File deleted successfully"
  *                 path:
- *                   type: string
- *                   example: "/mnt/pool1/oldfile.txt"
+ *                   oneOf:
+ *                     - type: string
+ *                       description: Deleted path (when a single path was requested)
+ *                     - type: array
+ *                       items:
+ *                         type: string
+ *                       description: Deleted paths (when an array was requested)
  *                 type:
- *                   type: string
- *                   enum: [file, directory]
- *                   example: "file"
+ *                   oneOf:
+ *                     - type: string
+ *                       enum: [file, directory]
+ *                       description: Item type (when a single path was requested)
+ *                     - type: array
+ *                       items:
+ *                         type: string
+ *                         enum: [file, directory]
+ *                         nullable: true
+ *                       description: Item type per path, same order as request (when an array was requested). null for nonexistent paths in force mode
  *                 recursive:
  *                   type: boolean
  *                   example: false
@@ -6270,11 +6311,18 @@ router.post('/createfolder', checkRole(['admin']), async (req, res) => {
  *                   type: boolean
  *                   example: true
  *       400:
- *         description: Bad request - missing path or directory not empty
+ *         description: Bad request - missing/invalid path or directory not empty
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/Error'
+ *             examples:
+ *               missing:
+ *                 value:
+ *                   error: "path parameter is required"
+ *               notempty:
+ *                 value:
+ *                   error: "Directory is not empty. Use recursive: true to delete non-empty directories: /mnt/pool1/old-folder"
  *       404:
  *         description: Path not found (when force=false)
  *         content:
@@ -6301,23 +6349,25 @@ router.post('/createfolder', checkRole(['admin']), async (req, res) => {
  *               $ref: '#/components/schemas/Error'
  */
 
-// POST: Delete a file or folder from the filesystem
+// POST: Delete one or more files or folders from the filesystem
 router.post('/delete', checkRole(['admin']), async (req, res) => {
   try {
     const { path, force = true, recursive = false } = req.body;
 
-    if (!path) {
+    if (!path || (Array.isArray(path) && path.length === 0)) {
       return res.status(400).json({ error: 'path parameter is required' });
     }
 
     const result = await mosService.deleteItem(path, { force, recursive });
     res.json(result);
   } catch (error) {
+    if (error.message.includes('not empty') ||
+        error.message.includes('is required') ||
+        error.message.includes('Invalid path')) {
+      return res.status(400).json({ error: error.message });
+    }
     if (error.message.includes('does not exist')) {
       return res.status(404).json({ error: error.message });
-    }
-    if (error.message.includes('not empty')) {
-      return res.status(400).json({ error: error.message });
     }
     res.status(500).json({ error: error.message });
   }
@@ -6327,8 +6377,12 @@ router.post('/delete', checkRole(['admin']), async (req, res) => {
  * @swagger
  * /mos/chown:
  *   post:
- *     summary: Change ownership of a file or folder
- *     description: Change the user and group ownership of a file or folder, optionally recursive
+ *     summary: Change ownership of one or more files or folders
+ *     description: |
+ *       Change the user and group ownership of one or more files or folders, optionally recursive.
+ *       - `path` accepts a single path (file or folder) or an array of paths
+ *       - All paths are validated upfront, nothing is changed if any path is invalid
+ *       - The response mirrors the request shape: a string stays a string, an array stays an array
  *     tags: [MOS]
  *     security:
  *       - bearerAuth: []
@@ -6342,8 +6396,14 @@ router.post('/delete', checkRole(['admin']), async (req, res) => {
  *               - path
  *             properties:
  *               path:
- *                 type: string
- *                 description: Absolute path to the file or folder
+ *                 oneOf:
+ *                   - type: string
+ *                     description: Absolute path to the file or folder
+ *                   - type: array
+ *                     items:
+ *                       type: string
+ *                     description: Array of absolute paths
+ *                 description: Absolute path to the file or folder, or an array of paths
  *                 example: "/mnt/pool1/myfile.txt"
  *               user:
  *                 type: string
@@ -6360,6 +6420,23 @@ router.post('/delete', checkRole(['admin']), async (req, res) => {
  *                 description: Apply ownership change recursively
  *                 example: false
  *                 default: false
+ *           examples:
+ *             single:
+ *               summary: Change ownership of a single file
+ *               value:
+ *                 path: "/mnt/pool1/myfile.txt"
+ *                 user: "500"
+ *                 group: "500"
+ *                 recursive: false
+ *             multiple:
+ *               summary: Change ownership of multiple files and folders
+ *               value:
+ *                 path:
+ *                   - "/mnt/pool1/myfile.txt"
+ *                   - "/mnt/pool1/myfolder"
+ *                 user: "500"
+ *                 group: "500"
+ *                 recursive: true
  *     responses:
  *       200:
  *         description: Ownership changed successfully
@@ -6375,8 +6452,13 @@ router.post('/delete', checkRole(['admin']), async (req, res) => {
  *                   type: string
  *                   example: "Ownership changed successfully"
  *                 path:
- *                   type: string
- *                   example: "/mnt/pool1/myfile.txt"
+ *                   oneOf:
+ *                     - type: string
+ *                       description: Path (when a single path was requested)
+ *                     - type: array
+ *                       items:
+ *                         type: string
+ *                       description: Paths (when an array was requested)
  *                 user:
  *                   type: string
  *                   example: "500"
@@ -6387,13 +6469,13 @@ router.post('/delete', checkRole(['admin']), async (req, res) => {
  *                   type: boolean
  *                   example: false
  *       400:
- *         description: Bad request - missing path
+ *         description: Bad request - missing/invalid path or invalid user/group
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/Error'
  *       404:
- *         description: Path not found
+ *         description: Path not found (single path) or listed in error message (array)
  *         content:
  *           application/json:
  *             schema:
@@ -6418,18 +6500,21 @@ router.post('/delete', checkRole(['admin']), async (req, res) => {
  *               $ref: '#/components/schemas/Error'
  */
 
-// POST: Change ownership of a file or folder
+// POST: Change ownership of one or more files or folders
 router.post('/chown', checkRole(['admin']), async (req, res) => {
   try {
     const { path, user = '500', group = '500', recursive = false } = req.body;
 
-    if (!path) {
+    if (!path || (Array.isArray(path) && path.length === 0)) {
       return res.status(400).json({ error: 'path parameter is required' });
     }
 
     const result = await mosService.chown(path, { user, group, recursive });
     res.json(result);
   } catch (error) {
+    if (error.message.includes('is required') || error.message.includes('Invalid')) {
+      return res.status(400).json({ error: error.message });
+    }
     if (error.message.includes('does not exist')) {
       return res.status(404).json({ error: error.message });
     }
@@ -6441,8 +6526,12 @@ router.post('/chown', checkRole(['admin']), async (req, res) => {
  * @swagger
  * /mos/chmod:
  *   post:
- *     summary: Change permissions of a file or folder
- *     description: Change the permissions of a file or folder, optionally recursive
+ *     summary: Change permissions of one or more files or folders
+ *     description: |
+ *       Change the permissions of one or more files or folders, optionally recursive.
+ *       - `path` accepts a single path (file or folder) or an array of paths
+ *       - All paths are validated upfront, nothing is changed if any path is invalid
+ *       - The response mirrors the request shape: a string stays a string, an array stays an array
  *     tags: [MOS]
  *     security:
  *       - bearerAuth: []
@@ -6456,8 +6545,14 @@ router.post('/chown', checkRole(['admin']), async (req, res) => {
  *               - path
  *             properties:
  *               path:
- *                 type: string
- *                 description: Absolute path to the file or folder
+ *                 oneOf:
+ *                   - type: string
+ *                     description: Absolute path to the file or folder
+ *                   - type: array
+ *                     items:
+ *                       type: string
+ *                     description: Array of absolute paths
+ *                 description: Absolute path to the file or folder, or an array of paths
  *                 example: "/mnt/pool1/myfile.txt"
  *               permissions:
  *                 type: string
@@ -6469,6 +6564,21 @@ router.post('/chown', checkRole(['admin']), async (req, res) => {
  *                 description: Apply permission change recursively
  *                 example: false
  *                 default: false
+ *           examples:
+ *             single:
+ *               summary: Change permissions of a single file
+ *               value:
+ *                 path: "/mnt/pool1/myfile.txt"
+ *                 permissions: "777"
+ *                 recursive: false
+ *             multiple:
+ *               summary: Change permissions of multiple files and folders
+ *               value:
+ *                 path:
+ *                   - "/mnt/pool1/myfile.txt"
+ *                   - "/mnt/pool1/myfolder"
+ *                 permissions: "755"
+ *                 recursive: true
  *     responses:
  *       200:
  *         description: Permissions changed successfully
@@ -6484,8 +6594,13 @@ router.post('/chown', checkRole(['admin']), async (req, res) => {
  *                   type: string
  *                   example: "Permissions changed successfully"
  *                 path:
- *                   type: string
- *                   example: "/mnt/pool1/myfile.txt"
+ *                   oneOf:
+ *                     - type: string
+ *                       description: Path (when a single path was requested)
+ *                     - type: array
+ *                       items:
+ *                         type: string
+ *                       description: Paths (when an array was requested)
  *                 permissions:
  *                   type: string
  *                   example: "777"
@@ -6493,13 +6608,13 @@ router.post('/chown', checkRole(['admin']), async (req, res) => {
  *                   type: boolean
  *                   example: false
  *       400:
- *         description: Bad request - missing path
+ *         description: Bad request - missing/invalid path or invalid permissions
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/Error'
  *       404:
- *         description: Path not found
+ *         description: Path not found (single path) or listed in error message (array)
  *         content:
  *           application/json:
  *             schema:
@@ -6524,18 +6639,21 @@ router.post('/chown', checkRole(['admin']), async (req, res) => {
  *               $ref: '#/components/schemas/Error'
  */
 
-// POST: Change permissions of a file or folder
+// POST: Change permissions of one or more files or folders
 router.post('/chmod', checkRole(['admin']), async (req, res) => {
   try {
     const { path, permissions = '777', recursive = false } = req.body;
 
-    if (!path) {
+    if (!path || (Array.isArray(path) && path.length === 0)) {
       return res.status(400).json({ error: 'path parameter is required' });
     }
 
     const result = await mosService.chmod(path, { permissions, recursive });
     res.json(result);
   } catch (error) {
+    if (error.message.includes('is required') || error.message.includes('Invalid')) {
+      return res.status(400).json({ error: error.message });
+    }
     if (error.message.includes('does not exist')) {
       return res.status(404).json({ error: error.message });
     }

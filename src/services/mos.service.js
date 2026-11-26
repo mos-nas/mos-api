@@ -8047,8 +8047,45 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
   }
 
   /**
-   * Change ownership of a file or folder
-   * @param {string} itemPath - Path to the file or folder
+   * Normalize a single path or array of paths for bulk filesystem operations
+   * @param {string|string[]} itemPath - Path or array of paths
+   * @returns {{paths: string[], isArr: boolean}} Normalized paths and input shape flag
+   * @private
+   */
+  _normalizePathInput(itemPath) {
+    if (!itemPath || (Array.isArray(itemPath) && itemPath.length === 0)) {
+      throw new Error('Path is required');
+    }
+
+    const isArr = Array.isArray(itemPath);
+    const paths = (isArr ? itemPath : [itemPath]).map(p => {
+      if (typeof p !== 'string' || !p.trim()) {
+        throw new Error('Invalid path. Must be a path or an array of paths');
+      }
+      return p;
+    });
+
+    return { paths, isArr };
+  }
+
+  /**
+   * Combine per-path validation problems into one readable error.
+   * A single-path request keeps its plain single-path message.
+   * @private
+   */
+  _pathProblemError(action, problems, total, isArr) {
+    if (problems.length === 1 && !isArr) {
+      return new Error(problems[0].detail);
+    }
+    const parts = problems.map(p => `${p.path} (${p.short})`);
+    return new Error(`Cannot ${action} ${problems.length} of ${total} paths: ${parts.join('; ')}`);
+  }
+
+  /**
+   * Change ownership of one or more files or folders.
+   * Accepts a single path or an array of paths - all paths are validated upfront,
+   * nothing is changed if any path is invalid. The response mirrors the input shape.
+   * @param {string|string[]} itemPath - Path or array of paths
    * @param {Object} options - Optional settings
    * @param {string} options.user - User ID or username (default: '500')
    * @param {string} options.group - Group ID or group name (default: '500')
@@ -8058,25 +8095,44 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
   async chown(itemPath, options = {}) {
     const { user = '500', group = '500', recursive = false } = options;
 
+    const { paths, isArr } = this._normalizePathInput(itemPath);
+
+    if (!/^[a-zA-Z0-9_.+-]+$/.test(user) || !/^[a-zA-Z0-9_.+-]+$/.test(group)) {
+      throw new Error('Invalid user or group. Must be a valid name or numeric ID');
+    }
+
     try {
-      // Check if path exists
-      try {
-        await fs.stat(itemPath);
-      } catch (error) {
-        if (error.code === 'ENOENT') {
-          throw new Error(`Path does not exist: ${itemPath}`);
+      // Validate all paths before changing anything
+      const problems = [];
+      for (const p of paths) {
+        try {
+          await fs.stat(p);
+        } catch (error) {
+          if (error.code === 'ENOENT') {
+            problems.push({ path: p, short: 'does not exist', detail: `Path does not exist: ${p}` });
+          } else {
+            throw error;
+          }
         }
-        throw error;
+      }
+      if (problems.length > 0) {
+        throw this._pathProblemError('change ownership of', problems, paths.length, isArr);
       }
 
-      // Build chown command
+      // Change ownership for each path
       const recursiveFlag = recursive ? '-R ' : '';
-      await execPromise(`chown ${recursiveFlag}${user}:${group} "${itemPath}"`);
+      for (const p of paths) {
+        try {
+          await execPromise(`chown ${recursiveFlag}${user}:${group} "${p}"`);
+        } catch (error) {
+          throw new Error(`Failed to change ownership of ${p}: ${error.message}`);
+        }
+      }
 
       return {
         success: true,
-        message: 'Ownership changed successfully',
-        path: itemPath,
+        message: isArr ? `Ownership changed successfully for ${paths.length} paths` : 'Ownership changed successfully',
+        path: isArr ? paths : paths[0],
         user: user,
         group: group,
         recursive: recursive
@@ -8088,8 +8144,10 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
   }
 
   /**
-   * Change permissions of a file or folder
-   * @param {string} itemPath - Path to the file or folder
+   * Change permissions of one or more files or folders.
+   * Accepts a single path or an array of paths - all paths are validated upfront,
+   * nothing is changed if any path is invalid. The response mirrors the input shape.
+   * @param {string|string[]} itemPath - Path or array of paths
    * @param {Object} options - Optional settings
    * @param {string} options.permissions - Permissions in octal format (default: '777')
    * @param {boolean} options.recursive - Apply recursively (default: false)
@@ -8098,25 +8156,44 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
   async chmod(itemPath, options = {}) {
     const { permissions = '777', recursive = false } = options;
 
+    const { paths, isArr } = this._normalizePathInput(itemPath);
+
+    if (!/^[0-7]{3,4}$/.test(permissions)) {
+      throw new Error('Invalid permissions. Must be an octal value like 777');
+    }
+
     try {
-      // Check if path exists
-      try {
-        await fs.stat(itemPath);
-      } catch (error) {
-        if (error.code === 'ENOENT') {
-          throw new Error(`Path does not exist: ${itemPath}`);
+      // Validate all paths before changing anything
+      const problems = [];
+      for (const p of paths) {
+        try {
+          await fs.stat(p);
+        } catch (error) {
+          if (error.code === 'ENOENT') {
+            problems.push({ path: p, short: 'does not exist', detail: `Path does not exist: ${p}` });
+          } else {
+            throw error;
+          }
         }
-        throw error;
+      }
+      if (problems.length > 0) {
+        throw this._pathProblemError('change permissions of', problems, paths.length, isArr);
       }
 
-      // Build chmod command
+      // Change permissions for each path
       const recursiveFlag = recursive ? '-R ' : '';
-      await execPromise(`chmod ${recursiveFlag}${permissions} "${itemPath}"`);
+      for (const p of paths) {
+        try {
+          await execPromise(`chmod ${recursiveFlag}${permissions} "${p}"`);
+        } catch (error) {
+          throw new Error(`Failed to change permissions of ${p}: ${error.message}`);
+        }
+      }
 
       return {
         success: true,
-        message: 'Permissions changed successfully',
-        path: itemPath,
+        message: isArr ? `Permissions changed successfully for ${paths.length} paths` : 'Permissions changed successfully',
+        path: isArr ? paths : paths[0],
         permissions: permissions,
         recursive: recursive
       };
@@ -8127,8 +8204,11 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
   }
 
   /**
-   * Deletes a file or folder from the filesystem
-   * @param {string} itemPath - Path to the file or folder to delete
+   * Deletes one or more files or folders from the filesystem
+   * Accepts a single path or an array of paths - all paths are validated upfront
+   * before anything is deleted. Output mirrors the input shape: a string stays
+   * a string, an array stays an array (in path and type fields).
+   * @param {string|string[]} itemPath - Path or array of paths to the files/folders to delete
    * @param {Object} options - Optional settings
    * @param {boolean} options.force - Force deletion (ignore nonexistent files, default: true)
    * @param {boolean} options.recursive - Recursively delete directories (default: false)
@@ -8137,54 +8217,101 @@ lxc.net.0.hwaddr = 00:16:3e:xx:xx:xx
   async deleteItem(itemPath, options = {}) {
     const { force = true, recursive = false } = options;
 
+    const { paths, isArr: pathIsArray } = this._normalizePathInput(itemPath);
+
     try {
-      // Check if path exists
-      let stats;
-      try {
-        stats = await fs.stat(itemPath);
-      } catch (error) {
-        if (error.code === 'ENOENT') {
+      // Validate all paths before deleting anything
+      const statsList = [];
+      const problems = [];
+      for (const p of paths) {
+        try {
+          const stats = await fs.stat(p);
+          statsList.push(stats);
+          // Check if directory is empty when recursive is false
+          if (stats.isDirectory() && !recursive) {
+            const contents = await fs.readdir(p);
+            if (contents.length > 0) {
+              problems.push({
+                path: p,
+                short: 'directory is not empty, use recursive: true',
+                detail: `Directory is not empty. Use recursive: true to delete non-empty directories: ${p}`
+              });
+            }
+          }
+        } catch (error) {
+          if (error.code === 'ENOENT') {
+            if (force) {
+              statsList.push(null);
+              continue;
+            }
+            problems.push({ path: p, short: 'does not exist', detail: `Path does not exist: ${p}` });
+          } else {
+            throw error;
+          }
+        }
+      }
+      if (problems.length > 0) {
+        throw this._pathProblemError('delete', problems, paths.length, pathIsArray);
+      }
+
+      // Delete each item
+      const types = [];
+      for (let i = 0; i < paths.length; i++) {
+        const stats = statsList[i];
+        if (!stats) {
+          // Nonexistent in force mode
+          types.push(null);
+          continue;
+        }
+
+        if (stats.isDirectory()) {
+          if (recursive) {
+            await fs.rm(paths[i], { recursive: true, force: force });
+          } else {
+            // Empty directory, use rmdir
+            await fs.rmdir(paths[i]);
+          }
+          types.push('directory');
+        } else {
+          // It's a file
           if (force) {
-            return {
-              success: true,
-              message: 'Item does not exist (force mode)',
-              path: itemPath
-            };
+            await fs.rm(paths[i], { force: true });
+          } else {
+            await fs.unlink(paths[i]);
           }
-          throw new Error(`Path does not exist: ${itemPath}`);
+          types.push('file');
         }
-        throw error;
       }
 
-      const isDirectory = stats.isDirectory();
-
-      if (isDirectory) {
-        // Check if directory is empty when recursive is false
-        if (!recursive) {
-          const contents = await fs.readdir(itemPath);
-          if (contents.length > 0) {
-            throw new Error(`Directory is not empty. Use recursive: true to delete non-empty directories: ${itemPath}`);
-          }
-          // Empty directory, use rmdir
-          await fs.rmdir(itemPath);
-        } else {
-          // Recursive delete
-          await fs.rm(itemPath, { recursive: true, force: force });
+      if (!pathIsArray) {
+        if (types[0] === null) {
+          return {
+            success: true,
+            message: 'Item does not exist (force mode)',
+            path: paths[0]
+          };
         }
-      } else {
-        // It's a file
-        if (force) {
-          await fs.rm(itemPath, { force: true });
-        } else {
-          await fs.unlink(itemPath);
-        }
+        return {
+          success: true,
+          message: types[0] === 'directory' ? 'Folder deleted successfully' : 'File deleted successfully',
+          path: paths[0],
+          type: types[0],
+          recursive: recursive,
+          force: force
+        };
       }
+
+      const notFound = types.filter(t => t === null).length;
+      const deleted = paths.length - notFound;
+      const message = notFound
+        ? `${deleted} items deleted successfully, ${notFound} did not exist (force mode)`
+        : `${deleted} items deleted successfully`;
 
       return {
         success: true,
-        message: isDirectory ? 'Folder deleted successfully' : 'File deleted successfully',
-        path: itemPath,
-        type: isDirectory ? 'directory' : 'file',
+        message: message,
+        path: paths,
+        type: types,
         recursive: recursive,
         force: force
       };
